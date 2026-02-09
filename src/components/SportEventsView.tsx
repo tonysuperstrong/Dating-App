@@ -42,6 +42,37 @@ const MOCK_PUBS: Record<string, string[]> = {
   'default': ['Local Sports Bar', 'The City Pub', 'Downtown Brewery', 'Corner Tavern', 'The Stadium Club']
 };
 
+const GamesCarousel = React.memo(({ games }: { games: Game[] }) => {
+  if (games.length === 0) return (
+      <View style={styles.noGamesContainer}>
+          <Text style={styles.noGamesText}>No games scheduled today</Text>
+      </View>
+  );
+
+  return (
+      <View style={styles.gamesSection}>
+          <Text style={styles.sectionTitle}>Today's Fixtures ({new Date().toLocaleDateString()})</Text>
+          <FlatList
+              horizontal
+              data={games}
+              keyExtractor={item => item.id}
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.gamesScrollContent}
+              renderItem={({ item: game }) => (
+                  <View style={styles.gameCard}>
+                      <Text style={styles.gameTime}>
+                          {new Date(game.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                      </Text>
+                      <Text style={styles.gameMatchup}>{game.name.replace(' at ', ' vs ')}</Text>
+                      <Text style={styles.gameLeague}>{game.league}</Text>
+                      <Text style={styles.gameStatus}>{game.status}</Text>
+                  </View>
+              )}
+          />
+      </View>
+  );
+});
+
 export default function SportEventsView() {
   const [events, setEvents] = useState<SportEvent[]>([]);
   const [userCountry, setUserCountry] = useState<string>('default');
@@ -353,37 +384,6 @@ export default function SportEventsView() {
 
   const categories = ['Soccer', 'Basketball', 'Tennis'];
 
-  const renderTodaysGames = () => {
-    if (realGames.length === 0) return (
-        <View style={styles.noGamesContainer}>
-            <Text style={styles.noGamesText}>No games scheduled today</Text>
-        </View>
-    );
-
-    return (
-        <View style={styles.gamesSection}>
-            <Text style={styles.sectionTitle}>Today's Fixtures ({new Date().toLocaleDateString()})</Text>
-            <FlatList
-                horizontal
-                data={realGames}
-                keyExtractor={item => item.id}
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.gamesScrollContent}
-                renderItem={({ item: game }) => (
-                    <View style={styles.gameCard}>
-                        <Text style={styles.gameTime}>
-                            {new Date(game.date).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
-                        </Text>
-                        <Text style={styles.gameMatchup}>{game.name.replace(' at ', ' vs ')}</Text>
-                        <Text style={styles.gameLeague}>{game.league}</Text>
-                        <Text style={styles.gameStatus}>{game.status}</Text>
-                    </View>
-                )}
-            />
-        </View>
-    );
-  };
-
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -416,7 +416,7 @@ export default function SportEventsView() {
         renderItem={renderEventItem}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
-        ListHeaderComponent={renderTodaysGames}
+        ListHeaderComponent={<GamesCarousel games={realGames} />}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }

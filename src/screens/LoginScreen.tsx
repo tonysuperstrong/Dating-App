@@ -7,6 +7,7 @@ import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 import * as Facebook from 'expo-auth-session/providers/facebook';
 import { ResponseType } from 'expo-auth-session';
+import ApiService from '../services/ApiService';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -29,20 +30,17 @@ export default function LoginScreen() {
     }
 
     try {
-      const storedProfile = await AsyncStorage.getItem('userProfile');
-      if (storedProfile) {
-        const profile = JSON.parse(storedProfile);
-        if (profile.username === username && profile.password === password) {
-          navigation.replace('Home');
-          return;
-        }
+      const user = await ApiService.login(username, password);
+      if (user) {
+        // Save user profile to AsyncStorage for app-wide use
+        await AsyncStorage.setItem('userProfile', JSON.stringify(user));
+        navigation.replace('Home');
+      } else {
+        Alert.alert('Login Failed', 'Invalid credentials');
       }
-      
-      // If no profile or mismatch
-      Alert.alert('Login Failed', 'Invalid username or password. If you are new, please login with social media to create a profile.');
     } catch (error) {
       console.error('Login error', error);
-      Alert.alert('Error', 'An error occurred during login');
+      Alert.alert('Login Failed', 'Invalid username or password');
     }
   };
 

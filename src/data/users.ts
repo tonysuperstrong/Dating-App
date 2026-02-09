@@ -1,5 +1,6 @@
 export interface User {
   id: string;
+  username?: string; // Optional because legacy mocks don't have it
   name: string;
   age: number;
   bio: string;
@@ -7,6 +8,7 @@ export interface User {
   type: 'date' | 'sport';
   location: string;
   hobbies: string[];
+  phone_number?: string; // Added for call feature verification
 }
 
 export const USERS: User[] = [

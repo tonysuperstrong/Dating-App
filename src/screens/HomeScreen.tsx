@@ -1,14 +1,17 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, Dimensions, Modal, TextInput, FlatList, TouchableWithoutFeedback, Keyboard, Alert } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, SafeAreaView, Dimensions, Modal, TextInput, FlatList, TouchableWithoutFeedback, Keyboard, Alert, Linking, Image } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 
+import ProfileView from '../components/ProfileView';
 import SportEventsView from '../components/SportEventsView';
 import DatePortalView from '../components/DatePortalView';
-import ChatService, { ConnectionRequest } from '../services/ChatService';
+import ChatService, { ConnectionRequest, ChatSession } from '../services/ChatService';
+import ApiService from '../services/ApiService';
+import { User } from '../data/users';
 
 const { width } = Dimensions.get('window');
 
@@ -17,11 +20,13 @@ type RootStackParamList = {
   Profile: undefined;
   AiAssistant: undefined;
   Schedule: undefined;
+  ProfileSetup: { isEditing?: boolean };
 };
 
 type HomeScreenNavigationProp = StackNavigationProp<RootStackParamList>;
 
 export default function HomeScreen() {
+  const [activeTab, setActiveTab] = useState<'home' | 'account'>('home');
   const [selectedCategory, setSelectedCategory] = useState<'date' | 'sport'>('date');
   const navigation = useNavigation<HomeScreenNavigationProp>();
 
@@ -35,8 +40,77 @@ export default function HomeScreen() {
   const [requestsModalVisible, setRequestsModalVisible] = useState(false);
   const [incomingRequests, setIncomingRequests] = useState<ConnectionRequest[]>([]);
 
+  // Call Feature State
+  const [isCallModalVisible, setCallModalVisible] = useState(false);
+  const [callType, setCallType] = useState<'phone' | 'facetime' | null>(null);
+  const [callFriends, setCallFriends] = useState<ChatSession[]>([]); // Matches to call
+  const [callStep, setCallStep] = useState<'type_selection' | 'user_selection'>('type_selection');
+
+  // Search State
+  const [isSearchModalVisible, setSearchModalVisible] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<User[]>([]);
+
+  // Notification State
+  const activeMatchesRef = React.useRef<Set<string>>(new Set());
+  const isFirstPoll = React.useRef(true);
+
   useEffect(() => {
     loadLocationData();
+    
+    // Start Poller for Match Notifications
+    const poller = setInterval(async () => {
+        try {
+            const profileString = await AsyncStorage.getItem('userProfile');
+            if (!profileString) return;
+            const profile = JSON.parse(profileString);
+            
+            // Get all chats
+            const chats = await ChatService.getChats();
+            
+            // Filter: Active matches where I was the initiator
+            const myActiveMatches = chats.filter(c => 
+                c.status === 'active' && 
+                String(c.initiatorId) === String(profile.id)
+            );
+            
+            const currentIds = new Set(myActiveMatches.map(m => m.id));
+
+            if (isFirstPoll.current) {
+                // First run: just sync state, don't alert
+                activeMatchesRef.current = currentIds;
+                isFirstPoll.current = false;
+            } else {
+                // Subsequent runs: check for new matches
+                let newMatchFound = false;
+                let newMatchName = '';
+
+                for (const m of myActiveMatches) {
+                    if (!activeMatchesRef.current.has(m.id)) {
+                        newMatchFound = true;
+                        newMatchName = m.user.name;
+                        break; // Notify for at least one
+                    }
+                }
+
+                if (newMatchFound) {
+                    Alert.alert('Match Accepted!', `${newMatchName} accepted your request! Start chatting now.`);
+                }
+                
+                // Update ref
+                activeMatchesRef.current = currentIds;
+            }
+
+            // Also refresh incoming requests badge
+            const reqs = await ChatService.getIncomingRequests();
+            setIncomingRequests(reqs);
+
+        } catch (e) {
+            console.error("Poller error:", e);
+        }
+    }, 5000); // Check every 5 seconds
+
+    return () => clearInterval(poller);
   }, []);
 
   useFocusEffect(
@@ -140,6 +214,102 @@ export default function HomeScreen() {
     setSelectedCategory(category);
   };
 
+  // Call Feature Handlers
+  const openCallModal = async () => {
+    // Check if user has phone number verified
+    try {
+        const profileString = await AsyncStorage.getItem('userProfile');
+        if (profileString) {
+            const profile = JSON.parse(profileString);
+            if (!profile.phone_number) {
+                Alert.alert(
+                    'Phone Number Required',
+                    'Please add your phone number in your profile to use the call feature.',
+                    [
+                        { text: 'Cancel', style: 'cancel' },
+                        { text: 'Go to Profile', onPress: () => navigation.navigate('ProfileSetup', { isEditing: true }) }
+                    ]
+                );
+                return;
+            }
+        }
+    } catch (error) {
+        console.error('Error checking profile for call:', error);
+    }
+
+    setCallStep('type_selection');
+    setCallType(null);
+    setCallModalVisible(true);
+    
+    // Fetch friends (active chats)
+    try {
+        const chats = await ChatService.getChats();
+        // Filter only active chats or people you can call
+        const friends = chats.filter(c => c.status === 'active' || c.status === 'pending'); // Maybe allow pending too?
+        setCallFriends(friends);
+    } catch (error) {
+        console.error('Error fetching friends for call:', error);
+    }
+  };
+
+  const handleSelectCallType = (type: 'phone' | 'facetime') => {
+    setCallType(type);
+    setCallStep('user_selection');
+  };
+
+  const handleMakeCall = (user: ChatSession['user']) => {
+    setCallModalVisible(false);
+    const name = user.name || 'User';
+    
+    if (callType === 'phone') {
+        if (user.phone_number) {
+            Linking.openURL(`tel:${user.phone_number}`);
+        } else {
+            Alert.alert('No Phone Number', `${name} hasn't added a phone number yet.`);
+        }
+    } else {
+        // Fallback or keep mock for FaceTime as we don't store emails yet
+        Alert.alert('FaceTime', `Starting FaceTime with ${name}...`, [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Start', onPress: () => Linking.openURL(`facetime:${user.phone_number || 'user@example.com'}`) } 
+        ]);
+    }
+  };
+
+  // Search Handlers
+  const handleSearch = async () => {
+      if (!searchQuery.trim()) return;
+      Keyboard.dismiss();
+      
+      const profileString = await AsyncStorage.getItem('userProfile');
+      let currentUserId = '';
+      if (profileString) {
+          const profile = JSON.parse(profileString);
+          currentUserId = profile.id;
+      }
+
+      const results = await ApiService.searchUsers(searchQuery, currentUserId);
+      setSearchResults(results);
+  };
+
+  const handleSendRequest = async (user: User) => {
+      const profileString = await AsyncStorage.getItem('userProfile');
+      if (!profileString) return;
+      const profile = JSON.parse(profileString);
+
+      try {
+          const response = await ApiService.likeUser(profile.id, user.id);
+          if (response.match) {
+              Alert.alert('It\'s a Match!', `You and ${user.name} are now connected!`);
+          } else {
+              Alert.alert('Request Sent', `Connection request sent to ${user.name}.`);
+          }
+          setSearchModalVisible(false);
+      } catch (error) {
+          Alert.alert('Error', 'Failed to send request.');
+      }
+  };
+
   const renderCategoryButton = (type: 'date' | 'sport', label: string, icon: string) => (
     <TouchableOpacity 
       style={[
@@ -158,44 +328,253 @@ export default function HomeScreen() {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        <View style={styles.header}>
-            <TouchableOpacity onPress={() => navigation.navigate('Schedule')}>
-                <Ionicons name="calendar-outline" size={28} color="#E5566D" />
+        
+        {/* Home Tab Content */}
+        {activeTab === 'home' && (
+            <>
+                <View style={styles.header}>
+                    <TouchableOpacity onPress={() => navigation.navigate('Schedule')}>
+                        <Ionicons name="calendar-outline" size={28} color="#E5566D" />
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity onPress={() => setLocationModalVisible(true)} style={styles.locationSelector}>
+                    <View style={styles.locationIconContainer}>
+                        <Text style={styles.locationIcon}>📍</Text>
+                    </View>
+                    <View style={{flex: 1}}>
+                        <Text style={styles.locationTitle}>Location</Text>
+                        <Text style={styles.locationText} numberOfLines={1} ellipsizeMode="tail">{location} ▼</Text>
+                    </View>
+                    </TouchableOpacity>
+
+                    <View style={{flexDirection: 'row', alignItems: 'center'}}>
+                        <TouchableOpacity onPress={() => setSearchModalVisible(true)} style={{marginRight: 15}}>
+                            <Ionicons name="search" size={28} color="#E5566D" />
+                        </TouchableOpacity>
+
+                        <TouchableOpacity onPress={() => setRequestsModalVisible(true)} style={{marginRight: 15, position: 'relative'}}>
+                            <Ionicons name="notifications-outline" size={28} color="#E5566D" />
+                            {incomingRequests.length > 0 && (
+                                <View style={{
+                                    position: 'absolute',
+                                    top: 0,
+                                    right: 0,
+                                    width: 10,
+                                    height: 10,
+                                    borderRadius: 5,
+                                    backgroundColor: '#E94057',
+                                    borderWidth: 1,
+                                    borderColor: '#fff'
+                                }} />
+                            )}
+                        </TouchableOpacity>
+
+                        <TouchableOpacity onPress={() => navigation.navigate('Chat')}>
+                            <Ionicons name="chatbubbles-outline" size={28} color="#E5566D" />
+                        </TouchableOpacity>
+                    </View>
+                </View>
+
+                <View style={styles.categoryContainer}>
+                    {renderCategoryButton('date', 'Date', '🌹')}
+                    {renderCategoryButton('sport', 'Sport', '⚽️')}
+                </View>
+
+                <View style={{ flex: 1, width: '100%' }}>
+                    {selectedCategory === 'sport' ? (
+                        <SportEventsView />
+                    ) : (
+                        <DatePortalView />
+                    )}
+                </View>
+
+                <TouchableOpacity 
+                    style={styles.aiButton} 
+                    onPress={() => navigation.navigate('AiAssistant')}
+                >
+                    <Text style={styles.aiButtonText}>✨ AI</Text>
+                </TouchableOpacity>
+            </>
+        )}
+
+        {/* Account Tab Content */}
+        {activeTab === 'account' && (
+            <View style={{ flex: 1, width: '100%' }}>
+                <ProfileView />
+            </View>
+        )}
+
+        {/* Bottom Navigation Bar */}
+        <View style={styles.bottomNav}>
+            <TouchableOpacity 
+                style={styles.navItem} 
+                onPress={() => setActiveTab('home')}
+            >
+                <Ionicons 
+                    name={activeTab === 'home' ? "home" : "home-outline"} 
+                    size={28} 
+                    color={activeTab === 'home' ? "#E94057" : "#ADADAD"} 
+                />
+                <Text style={[styles.navText, activeTab === 'home' && styles.navTextActive]}>Home</Text>
             </TouchableOpacity>
             
-            <TouchableOpacity onPress={() => setLocationModalVisible(true)} style={styles.locationSelector}>
-              <View style={styles.locationIconContainer}>
-                <Text style={styles.locationIcon}>📍</Text>
-              </View>
-              <View style={{flex: 1}}>
-                <Text style={styles.locationTitle}>Location</Text>
-                <Text style={styles.locationText} numberOfLines={1} ellipsizeMode="tail">{location} ▼</Text>
-              </View>
+            {/* Call Button (Center) */}
+            <TouchableOpacity 
+                style={styles.callButtonWrapper} 
+                onPress={openCallModal}
+            >
+                <View style={styles.callButtonCircle}>
+                    <Ionicons name="call" size={28} color="#fff" />
+                </View>
             </TouchableOpacity>
 
-            <View style={{flexDirection: 'row', alignItems: 'center'}}>
-                <TouchableOpacity onPress={() => setRequestsModalVisible(true)} style={{marginRight: 15, position: 'relative'}}>
-                    <Ionicons name="notifications-outline" size={28} color="#E5566D" />
-                    {incomingRequests.length > 0 && (
-                        <View style={{
-                            position: 'absolute',
-                            top: 0,
-                            right: 0,
-                            width: 10,
-                            height: 10,
-                            borderRadius: 5,
-                            backgroundColor: '#E94057',
-                            borderWidth: 1,
-                            borderColor: '#fff'
-                        }} />
-                    )}
-                </TouchableOpacity>
-
-                <TouchableOpacity onPress={() => navigation.navigate('Chat')}>
-                    <Ionicons name="chatbubbles-outline" size={28} color="#E5566D" />
-                </TouchableOpacity>
-            </View>
+            <TouchableOpacity 
+                style={styles.navItem} 
+                onPress={() => setActiveTab('account')}
+            >
+                <Ionicons 
+                    name={activeTab === 'account' ? "person" : "person-outline"} 
+                    size={28} 
+                    color={activeTab === 'account' ? "#E94057" : "#ADADAD"} 
+                />
+                <Text style={[styles.navText, activeTab === 'account' && styles.navTextActive]}>Account</Text>
+            </TouchableOpacity>
         </View>
+
+        {/* Search Modal */}
+        <Modal
+            animationType="slide"
+            transparent={true}
+            visible={isSearchModalVisible}
+            onRequestClose={() => setSearchModalVisible(false)}
+        >
+            <View style={styles.modalOverlay}>
+                <View style={[styles.modalContent, { height: '80%' }]}>
+                    <View style={styles.modalHeader}>
+                        <Text style={styles.modalTitle}>Find People</Text>
+                        <TouchableOpacity onPress={() => setSearchModalVisible(false)}>
+                            <Ionicons name="close" size={24} color="#000" />
+                        </TouchableOpacity>
+                    </View>
+
+                    <View style={styles.inputContainer}>
+                        <TextInput
+                            style={styles.input}
+                            placeholder="Search by username or name..."
+                            value={searchQuery}
+                            onChangeText={setSearchQuery}
+                            returnKeyType="search"
+                            onSubmitEditing={handleSearch}
+                        />
+                        <TouchableOpacity style={styles.addButton} onPress={handleSearch}>
+                            <Ionicons name="search" size={20} color="#fff" />
+                        </TouchableOpacity>
+                    </View>
+
+                    <FlatList
+                        data={searchResults}
+                        keyExtractor={item => item.id}
+                        renderItem={({ item }) => (
+                            <View style={styles.friendItem}>
+                                {item.image && item.image.startsWith('#') ? (
+                                    <View style={[styles.friendAvatar, { backgroundColor: item.image }]}>
+                                        <Text style={{color:'#fff', fontSize:18}}>{item.name[0]}</Text>
+                                    </View>
+                                ) : (
+                                    <Image source={{ uri: item.image }} style={styles.friendAvatar} />
+                                )}
+                                <View style={{flex: 1}}>
+                                    <Text style={styles.friendName}>{item.name}</Text>
+                                    <Text style={styles.friendStatus}>@{item.username}</Text>
+                                </View>
+                                <TouchableOpacity 
+                                    style={styles.actionButton} 
+                                    onPress={() => handleSendRequest(item)}
+                                >
+                                    <Ionicons name="person-add" size={20} color="#E5566D" />
+                                </TouchableOpacity>
+                            </View>
+                        )}
+                        ListEmptyComponent={
+                            <View style={styles.emptyContainer}>
+                                <Text style={styles.emptyText}>No users found.</Text>
+                            </View>
+                        }
+                    />
+                </View>
+            </View>
+        </Modal>
+
+        {/* Call Selection Modal */}
+        <Modal
+            animationType="slide"
+            transparent={true}
+            visible={isCallModalVisible}
+            onRequestClose={() => setCallModalVisible(false)}
+        >
+            <View style={styles.modalOverlay}>
+                <View style={[styles.modalContent, { height: callStep === 'user_selection' ? '60%' : 'auto' }]}>
+                    <View style={styles.modalHeader}>
+                        <Text style={styles.modalTitle}>
+                            {callStep === 'type_selection' ? 'Start a Call' : `Select Contact (${callType === 'phone' ? 'Phone' : 'FaceTime'})`}
+                        </Text>
+                        <TouchableOpacity onPress={() => setCallModalVisible(false)}>
+                            <Ionicons name="close" size={24} color="#000" />
+                        </TouchableOpacity>
+                    </View>
+
+                    {callStep === 'type_selection' ? (
+                        <View style={styles.callTypeContainer}>
+                            <TouchableOpacity style={styles.callTypeButton} onPress={() => handleSelectCallType('phone')}>
+                                <View style={[styles.callIconCircle, { backgroundColor: '#4CD964' }]}>
+                                    <Ionicons name="call" size={32} color="#fff" />
+                                </View>
+                                <Text style={styles.callTypeText}>Phone Call</Text>
+                            </TouchableOpacity>
+
+                            <TouchableOpacity style={styles.callTypeButton} onPress={() => handleSelectCallType('facetime')}>
+                                <View style={[styles.callIconCircle, { backgroundColor: '#34C759' }]}>
+                                    <Ionicons name="videocam" size={32} color="#fff" />
+                                </View>
+                                <Text style={styles.callTypeText}>FaceTime</Text>
+                            </TouchableOpacity>
+                        </View>
+                    ) : (
+                        <View style={{ flex: 1, width: '100%' }}>
+                            {callFriends.length > 0 ? (
+                                <FlatList
+                                    data={callFriends}
+                                    keyExtractor={item => item.id}
+                                    renderItem={({ item }) => (
+                                        <TouchableOpacity style={styles.friendItem} onPress={() => handleMakeCall(item.user)}>
+                                            {item.user.image && item.user.image.startsWith('#') ? (
+                                                <View style={[styles.friendAvatar, { backgroundColor: item.user.image }]}>
+                                                    <Text style={{color:'#fff', fontSize:18}}>{item.user.name[0]}</Text>
+                                                </View>
+                                            ) : (
+                                                <Image source={{ uri: item.user.image }} style={styles.friendAvatar} />
+                                            )}
+                                            <View style={{flex: 1}}>
+                                                <Text style={styles.friendName}>{item.user.name}</Text>
+                                                <Text style={styles.friendStatus}>{item.status === 'active' ? 'Match' : 'Pending'}</Text>
+                                            </View>
+                                            <Ionicons name={callType === 'phone' ? "call-outline" : "videocam-outline"} size={24} color="#E5566D" />
+                                        </TouchableOpacity>
+                                    )}
+                                />
+                            ) : (
+                                <View style={styles.emptyContainer}>
+                                    <Text style={styles.emptyText}>No matches found to call.</Text>
+                                </View>
+                            )}
+                            <TouchableOpacity style={styles.backButton} onPress={() => setCallStep('type_selection')}>
+                                <Text style={styles.backButtonText}>Back</Text>
+                            </TouchableOpacity>
+                        </View>
+                    )}
+                </View>
+            </View>
+        </Modal>
 
         <Modal
           animationType="slide"
@@ -262,26 +641,6 @@ export default function HomeScreen() {
           </TouchableWithoutFeedback>
         </Modal>
 
-        <View style={styles.categoryContainer}>
-          {renderCategoryButton('date', 'Date', '🌹')}
-          {renderCategoryButton('sport', 'Sport', '⚽️')}
-        </View>
-
-        <View style={{ flex: 1, width: '100%' }}>
-            {selectedCategory === 'sport' ? (
-                 <SportEventsView />
-            ) : (
-                 <DatePortalView />
-            )}
-        </View>
-
-        <TouchableOpacity 
-          style={styles.aiButton} 
-          onPress={() => navigation.navigate('AiAssistant')}
-        >
-          <Text style={styles.aiButtonText}>✨ AI</Text>
-        </TouchableOpacity>
-
         {/* Notifications / Requests Modal */}
         <Modal
             visible={requestsModalVisible}
@@ -341,6 +700,34 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingVertical: 20,
+    paddingBottom: 80, // Add padding for bottom nav
+  },
+  bottomNav: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    alignItems: 'center',
+    width: '100%',
+    height: 70,
+    backgroundColor: '#fff',
+    borderTopWidth: 1,
+    borderTopColor: '#f0f0f0',
+    position: 'absolute',
+    bottom: 0,
+    paddingBottom: 10,
+  },
+  navItem: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    flex: 1,
+  },
+  navText: {
+    fontSize: 10,
+    color: '#ADADAD',
+    marginTop: 4,
+  },
+  navTextActive: {
+    color: '#E94057',
+    fontWeight: 'bold',
   },
   header: {
     flexDirection: 'row',
@@ -600,5 +987,79 @@ const styles = StyleSheet.create({
       backgroundColor: '#fff',
       borderWidth: 1,
       borderColor: '#eee',
+  },
+  callButtonWrapper: {
+    top: -20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  callButtonCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    backgroundColor: '#E94057',
+    justifyContent: 'center',
+    alignItems: 'center',
+    shadowColor: '#E94057',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 5,
+  },
+  callTypeContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginVertical: 30,
+  },
+  callTypeButton: {
+    alignItems: 'center',
+  },
+  callIconCircle: {
+    width: 70,
+    height: 70,
+    borderRadius: 35,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  callTypeText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+  },
+  friendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  friendAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  friendName: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  friendStatus: {
+    fontSize: 12,
+    color: '#888',
+  },
+  backButton: {
+    marginTop: 20,
+    padding: 15,
+    backgroundColor: '#f0f0f0',
+    borderRadius: 10,
+    alignItems: 'center',
+  },
+  backButtonText: {
+    color: '#333',
+    fontWeight: '600',
   },
 });

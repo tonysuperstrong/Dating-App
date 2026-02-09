@@ -4,6 +4,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import ApiService from '../services/ApiService';
 
 type RootStackParamList = {
   Home: undefined;
@@ -45,6 +46,24 @@ const ETHNICITIES = [
   'Middle Eastern', 'Native American', 'Pacific Islander', 'Mixed', 'Other'
 ];
 
+const COUNTRY_CODES = [
+  { code: '+1', country: 'US/CA' },
+  { code: '+44', country: 'UK' },
+  { code: '+86', country: 'CN' },
+  { code: '+81', country: 'JP' },
+  { code: '+852', country: 'HK' },
+  { code: '+33', country: 'FR' },
+  { code: '+49', country: 'DE' },
+  { code: '+61', country: 'AU' },
+  { code: '+91', country: 'IN' },
+  { code: '+82', country: 'KR' },
+  { code: '+55', country: 'BR' },
+  { code: '+52', country: 'MX' },
+  { code: '+34', country: 'ES' },
+  { code: '+39', country: 'IT' },
+  { code: '+7', country: 'RU' },
+];
+
 const GENDER_OPTIONS = ['Male', 'Female', 'Non-binary', 'Other', 'Prefer not to say'];
 
 export default function ProfileSetupScreen() {
@@ -52,6 +71,7 @@ export default function ProfileSetupScreen() {
   const route = useRoute<ProfileSetupScreenRouteProp>();
   const isEditing = route.params?.isEditing;
 
+  const [userId, setUserId] = useState<string | null>(null);
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [bio, setBio] = useState('');
@@ -61,6 +81,14 @@ export default function ProfileSetupScreen() {
   const [ethnicity, setEthnicity] = useState('');
   const [gender, setGender] = useState('');
   const [age, setAge] = useState('');
+  
+  // Phone & Verification State
+  const [countryCode, setCountryCode] = useState('+1');
+  const [phoneInput, setPhoneInput] = useState('');
+  const [isPhoneVerified, setIsPhoneVerified] = useState(false);
+  const [isVerifying, setIsVerifying] = useState(false);
+  const [verificationCode, setVerificationCode] = useState('');
+  
   const [image, setImage] = useState<string | null>(null);
 
   useEffect(() => {
@@ -69,16 +97,29 @@ export default function ProfileSetupScreen() {
         const storedProfile = await AsyncStorage.getItem('userProfile');
         if (storedProfile) {
           const profile = JSON.parse(storedProfile);
+          setUserId(profile.id);
           setUsername(profile.username || '');
           setPassword(profile.password || '');
           setBio(profile.bio || '');
-          setHobbies(profile.hobbies || '');
-          setCountry(profile.country || '');
+          setHobbies(Array.isArray(profile.hobbies) ? profile.hobbies.join(', ') : (profile.hobbies || ''));
+          setCountry(profile.location || profile.country || '');
           setLanguage(profile.language || '');
           setEthnicity(profile.ethnicity || '');
           setGender(profile.gender || '');
-          setAge(profile.age || '');
+          setAge(profile.age?.toString() || '');
           setImage(profile.image || null);
+          
+          if (profile.phone_number) {
+            // Try to parse country code
+            const foundCode = COUNTRY_CODES.find(c => profile.phone_number.startsWith(c.code));
+            if (foundCode) {
+                setCountryCode(foundCode.code);
+                setPhoneInput(profile.phone_number.replace(foundCode.code, ''));
+            } else {
+                setPhoneInput(profile.phone_number);
+            }
+            setIsPhoneVerified(true); // Assume saved number is verified
+          }
         }
       } catch (error) {
         console.error('Failed to load profile', error);
@@ -91,6 +132,7 @@ export default function ProfileSetupScreen() {
   const [countryModalVisible, setCountryModalVisible] = useState(false);
   const [ethnicityModalVisible, setEthnicityModalVisible] = useState(false);
   const [genderModalVisible, setGenderModalVisible] = useState(false);
+  const [countryCodeModalVisible, setCountryCodeModalVisible] = useState(false);
 
   const pickImage = async () => {
     // No permissions request is necessary for launching the image library
@@ -106,27 +148,80 @@ export default function ProfileSetupScreen() {
     }
   };
 
+  const handleSendOtp = async () => {
+    if (!phoneInput) {
+      Alert.alert('Error', 'Please enter a phone number');
+      return;
+    }
+    
+    const fullNumber = countryCode + phoneInput;
+    const response = await ApiService.sendOtp(fullNumber);
+    
+    if (response.success) {
+        setIsVerifying(true);
+        Alert.alert('Code Sent', `Your verification code is: ${response.code}`); // For testing
+    } else {
+        Alert.alert('Error', response.error || 'Failed to send OTP');
+    }
+  };
+
+  const handleVerifyOtp = async () => {
+    if (!verificationCode) return;
+    
+    const fullNumber = countryCode + phoneInput;
+    const response = await ApiService.verifyOtp(fullNumber, verificationCode);
+    
+    if (response.success) {
+        setIsPhoneVerified(true);
+        setIsVerifying(false);
+        setVerificationCode('');
+        Alert.alert('Success', 'Phone number verified!');
+    } else {
+        Alert.alert('Error', response.error || 'Invalid code');
+    }
+  };
+
   const handleSave = async () => {
     if (!username || !password || !bio || !hobbies || !image || !country || !language || !ethnicity || !gender || !age) {
       Alert.alert('Missing Information', 'Please fill in all fields and upload a profile picture.');
       return;
+    }
+
+    // Check Phone Verification
+    if (phoneInput && !isPhoneVerified) {
+        Alert.alert('Verification Required', 'Please verify your phone number before saving.');
+        return;
     }
     
     try {
       const userProfile = {
         username,
         password,
+        name: username, // Use username as name for now
+        age: parseInt(age, 10),
         bio,
-        hobbies,
         image,
-        country,
+        type: 'date', // Default type
+        location: country,
+        hobbies: hobbies.split(',').map(h => h.trim()).filter(h => h), // Convert string to array and filter empty
         language,
         ethnicity,
         gender,
-        age,
+        phone_number: phoneInput ? (countryCode + phoneInput) : '',
       };
+
+      let response;
+      if (isEditing && userId) {
+        // Update existing user
+        response = await ApiService.updateUser(userId, userProfile);
+      } else {
+        // Create new user
+        response = await ApiService.signup(userProfile);
+      }
       
-      await AsyncStorage.setItem('userProfile', JSON.stringify(userProfile));
+      // Save complete profile with ID from backend to AsyncStorage
+      const profileToSave = { ...userProfile, id: response.id };
+      await AsyncStorage.setItem('userProfile', JSON.stringify(profileToSave));
       
       if (isEditing) {
         navigation.goBack();
@@ -134,7 +229,8 @@ export default function ProfileSetupScreen() {
         navigation.replace('Home');
       }
     } catch (error) {
-      Alert.alert('Error', 'Failed to save profile data');
+      console.error('Save error:', error);
+      Alert.alert('Error', 'Failed to save profile data. Please try again.');
     }
   };
 
@@ -181,131 +277,211 @@ export default function ProfileSetupScreen() {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Create Profile</Text>
-      <Text style={styles.subtitle}>Tell us about yourself!</Text>
+      <Text style={styles.title}>{isEditing ? 'Edit Profile' : 'Create Profile'}</Text>
+      <Text style={styles.subtitle}>{isEditing ? 'Update your details' : 'Tell us about yourself!'}</Text>
 
       <TouchableOpacity onPress={pickImage} style={styles.imageContainer}>
         {image ? (
           <Image source={{ uri: image }} style={styles.image} />
         ) : (
           <View style={styles.placeholder}>
-            <Text style={styles.placeholderText}>Tap to Upload Photo</Text>
+            <Text style={styles.placeholderText}>Upload Photo</Text>
           </View>
         )}
       </TouchableOpacity>
 
-      <View style={styles.form}>
+      <View style={styles.inputContainer}>
         <Text style={styles.label}>Username</Text>
         <TextInput
           style={styles.input}
-          placeholder="Enter username"
+          placeholder="Choose a username"
           value={username}
           onChangeText={setUsername}
           autoCapitalize="none"
         />
+      </View>
 
+      <View style={styles.inputContainer}>
         <Text style={styles.label}>Password</Text>
         <TextInput
           style={styles.input}
-          placeholder="Enter password"
+          placeholder="Choose a password"
           value={password}
           onChangeText={setPassword}
           secureTextEntry
         />
+      </View>
 
-        <Text style={styles.label}>Country</Text>
-        <TouchableOpacity 
-          style={styles.input} 
-          onPress={() => setCountryModalVisible(true)}
-        >
-          <Text style={{ color: country ? '#000' : '#C7C7CD' }}>
-            {country || "Select Country"}
-          </Text>
-        </TouchableOpacity>
-
-        <Text style={styles.label}>First Language</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="E.g., English, Spanish, Mandarin"
-          value={language}
-          onChangeText={setLanguage}
-        />
-
-        <Text style={styles.label}>Ethnicity</Text>
-        <TouchableOpacity 
-          style={styles.input} 
-          onPress={() => setEthnicityModalVisible(true)}
-        >
-          <Text style={{ color: ethnicity ? '#000' : '#C7C7CD' }}>
-            {ethnicity || "Select Ethnicity"}
-          </Text>
-        </TouchableOpacity>
-
-        <Text style={styles.label}>Gender</Text>
-        <TouchableOpacity 
-          style={styles.input} 
-          onPress={() => setGenderModalVisible(true)}
-        >
-          <Text style={{ color: gender ? '#000' : '#C7C7CD' }}>
-            {gender || "Select Gender"}
-          </Text>
-        </TouchableOpacity>
-
+      <View style={styles.inputContainer}>
         <Text style={styles.label}>Age</Text>
         <TextInput
           style={styles.input}
-          placeholder="Enter your age"
+          placeholder="Your age"
           value={age}
-          onChangeText={(text) => setAge(text.replace(/[^0-9]/g, ''))}
-          keyboardType="numeric"
-          maxLength={3}
+          onChangeText={setAge}
+          keyboardType="number-pad"
         />
+      </View>
 
-        <Text style={styles.label}>About Me</Text>
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Phone Number</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+            <TouchableOpacity 
+                style={[styles.input, { width: 80, marginRight: 10, justifyContent: 'center', alignItems: 'center' }]}
+                onPress={() => setCountryCodeModalVisible(true)}
+            >
+                <Text style={{ fontSize: 16 }}>{countryCode}</Text>
+            </TouchableOpacity>
+            
+            <TextInput
+                style={[styles.input, { flex: 1 }]}
+                placeholder="Number"
+                value={phoneInput}
+                onChangeText={(text) => {
+                    setPhoneInput(text);
+                    setIsPhoneVerified(false); // Reset verification on change
+                }}
+                keyboardType="phone-pad"
+            />
+            
+            <TouchableOpacity 
+                style={[styles.button, { marginTop: 0, marginLeft: 10, padding: 15, backgroundColor: isPhoneVerified ? '#4CAF50' : '#E94057' }]}
+                onPress={handleSendOtp}
+                disabled={isPhoneVerified}
+            >
+                <Text style={[styles.buttonText, { fontSize: 14 }]}>
+                    {isPhoneVerified ? 'Verified' : 'Verify'}
+                </Text>
+            </TouchableOpacity>
+        </View>
+
+        {isVerifying && (
+            <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center' }}>
+                <TextInput
+                    style={[styles.input, { flex: 1, marginRight: 10 }]}
+                    placeholder="Enter Code"
+                    value={verificationCode}
+                    onChangeText={setVerificationCode}
+                    keyboardType="number-pad"
+                />
+                <TouchableOpacity 
+                    style={[styles.button, { marginTop: 0, padding: 15 }]}
+                    onPress={handleVerifyOtp}
+                >
+                    <Text style={[styles.buttonText, { fontSize: 14 }]}>Confirm</Text>
+                </TouchableOpacity>
+            </View>
+        )}
+      </View>
+
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Bio</Text>
         <TextInput
           style={[styles.input, styles.textArea]}
-          placeholder="Write a short description about yourself..."
+          placeholder="Write a short bio..."
           value={bio}
           onChangeText={setBio}
           multiline
           numberOfLines={4}
         />
+      </View>
 
-        <Text style={styles.label}>Hobbies</Text>
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Hobbies (comma separated)</Text>
         <TextInput
           style={styles.input}
-          placeholder="E.g., Hiking, Cooking, Gaming (comma separated)"
+          placeholder="e.g. Reading, Hiking, Gaming"
           value={hobbies}
           onChangeText={setHobbies}
         />
       </View>
 
+      {/* Country Selection */}
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Country</Text>
+        <TouchableOpacity 
+          style={styles.selector}
+          onPress={() => setCountryModalVisible(true)}
+        >
+          <Text style={country ? styles.selectorText : styles.placeholderText}>
+            {country || "Select Country"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Language</Text>
+        <TextInput
+          style={styles.input}
+          placeholder="e.g. English, Spanish"
+          value={language}
+          onChangeText={setLanguage}
+        />
+      </View>
+
+      {/* Ethnicity Selection */}
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Ethnicity</Text>
+        <TouchableOpacity 
+          style={styles.selector}
+          onPress={() => setEthnicityModalVisible(true)}
+        >
+          <Text style={ethnicity ? styles.selectorText : styles.placeholderText}>
+            {ethnicity || "Select Ethnicity"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Gender Selection */}
+      <View style={styles.inputContainer}>
+        <Text style={styles.label}>Gender</Text>
+        <TouchableOpacity 
+          style={styles.selector}
+          onPress={() => setGenderModalVisible(true)}
+        >
+          <Text style={gender ? styles.selectorText : styles.placeholderText}>
+            {gender || "Select Gender"}
+          </Text>
+        </TouchableOpacity>
+      </View>
+
       <TouchableOpacity style={styles.button} onPress={handleSave}>
-        <Text style={styles.buttonText}>Complete Profile</Text>
+        <Text style={styles.buttonText}>{isEditing ? 'Save Changes' : 'Get Started'}</Text>
       </TouchableOpacity>
-      
-      {/* Modals */}
+
       {renderSelectionModal(
         countryModalVisible, 
         () => setCountryModalVisible(false), 
         COUNTRIES, 
-        setCountry,
+        setCountry, 
         "Country"
       )}
+
       {renderSelectionModal(
         ethnicityModalVisible, 
         () => setEthnicityModalVisible(false), 
         ETHNICITIES, 
-        setEthnicity,
+        setEthnicity, 
         "Ethnicity"
       )}
+
       {renderSelectionModal(
         genderModalVisible, 
         () => setGenderModalVisible(false), 
         GENDER_OPTIONS, 
-        setGender,
+        setGender, 
         "Gender"
       )}
+
+      {renderSelectionModal(
+        countryCodeModalVisible,
+        () => setCountryCodeModalVisible(false),
+        COUNTRY_CODES.map(c => `${c.code} (${c.country})`),
+        (item) => setCountryCode(item.split(' ')[0]),
+        "Country Code"
+      )}
+
+      <View style={{ height: 50 }} />
     </ScrollView>
   );
 }
@@ -313,69 +489,61 @@ export default function ProfileSetupScreen() {
 const styles = StyleSheet.create({
   container: {
     flexGrow: 1,
-    backgroundColor: '#fff',
-    alignItems: 'center',
     padding: 20,
-    paddingTop: 60,
+    backgroundColor: '#fff',
   },
   title: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
     color: '#E94057',
     marginBottom: 10,
+    textAlign: 'center',
   },
   subtitle: {
-    fontSize: 18,
+    fontSize: 16,
     color: '#666',
+    textAlign: 'center',
     marginBottom: 30,
   },
   imageContainer: {
+    alignSelf: 'center',
     marginBottom: 30,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
   },
   image: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
   },
   placeholder: {
-    width: 150,
-    height: 150,
-    borderRadius: 75,
+    width: 120,
+    height: 120,
+    borderRadius: 60,
     backgroundColor: '#f0f0f0',
     justifyContent: 'center',
     alignItems: 'center',
-    borderWidth: 2,
-    borderColor: '#E94057',
+    borderWidth: 1,
+    borderColor: '#ddd',
     borderStyle: 'dashed',
   },
   placeholderText: {
-    color: '#E94057',
-    textAlign: 'center',
-    padding: 20,
+    color: '#999',
   },
-  form: {
-    width: '100%',
-    marginBottom: 30,
+  inputContainer: {
+    marginBottom: 20,
   },
   label: {
     fontSize: 16,
     fontWeight: 'bold',
-    color: '#333',
     marginBottom: 8,
-    marginTop: 10,
+    color: '#333',
   },
   input: {
     backgroundColor: '#f9f9f9',
     padding: 15,
-    borderRadius: 15,
+    borderRadius: 10,
+    fontSize: 16,
     borderWidth: 1,
     borderColor: '#eee',
-    fontSize: 16,
   },
   textArea: {
     height: 100,
@@ -383,27 +551,42 @@ const styles = StyleSheet.create({
   },
   button: {
     backgroundColor: '#E94057',
-    paddingHorizontal: 40,
-    paddingVertical: 15,
+    padding: 18,
     borderRadius: 30,
-    width: '100%',
     alignItems: 'center',
+    marginTop: 20,
+    shadowColor: '#E94057',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 10,
+    elevation: 5,
   },
   buttonText: {
-    color: '#fff',
+    color: 'white',
     fontSize: 18,
     fontWeight: 'bold',
   },
+  selector: {
+    backgroundColor: '#f9f9f9',
+    padding: 15,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#eee',
+  },
+  selectorText: {
+    fontSize: 16,
+    color: '#333',
+  },
   modalOverlay: {
     flex: 1,
-    justifyContent: 'flex-end',
     backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
   },
   modalContent: {
     backgroundColor: 'white',
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
-    height: '50%',
+    maxHeight: '70%',
     padding: 20,
   },
   modalHeader: {
@@ -412,7 +595,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 20,
     borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    borderBottomColor: '#f0f0f0',
     paddingBottom: 10,
   },
   modalTitle: {
@@ -428,7 +611,7 @@ const styles = StyleSheet.create({
   modalItem: {
     paddingVertical: 15,
     borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
+    borderBottomColor: '#f9f9f9',
   },
   modalItemText: {
     fontSize: 16,

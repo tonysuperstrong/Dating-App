@@ -1,15 +1,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { User, USERS } from '../data/users';
+import ApiService from './ApiService';
 
 const CHATS_KEY = 'user_chats';
 const REQUESTS_KEY = 'incoming_requests';
 
 export interface ChatSession {
-  id: string; // usually user.id
+  id: string; // match.id
   user: User;
   lastMessage: string;
   timestamp: number;
   status: 'active' | 'pending';
+  initiatorId: string;
 }
 
 export interface ConnectionRequest {
@@ -23,8 +25,24 @@ class ChatService {
   // Get all active chats
   async getChats(): Promise<ChatSession[]> {
     try {
-      const data = await AsyncStorage.getItem(CHATS_KEY);
-      return data ? JSON.parse(data) : [];
+      // Get current user ID
+      const profileString = await AsyncStorage.getItem('userProfile');
+      if (!profileString) return [];
+      const profile = JSON.parse(profileString);
+      
+      const matches = await ApiService.getMatches(profile.id);
+      
+      // Map backend matches to ChatSession
+      const sessions = matches.map((m: any) => ({
+        id: m.id, // match_id
+        user: m.user,
+        lastMessage: m.lastMessage || 'Start chatting!',
+        timestamp: m.timestamp || Date.now(),
+        status: m.status,
+        initiatorId: m.user1_id
+      }));
+      console.log('ChatService: Mapped sessions:', JSON.stringify(sessions, null, 2));
+      return sessions;
     } catch (error) {
       console.error('Error getting chats:', error);
       return [];
@@ -33,72 +51,42 @@ class ChatService {
 
   // Add a chat (when I like someone, or accept a request)
   async addChat(user: User, status: 'active' | 'pending' = 'pending'): Promise<void> {
-    const chats = await this.getChats();
-    // Check if already exists
-    if (chats.some(c => c.user.id === user.id)) return;
-
-    const newChat: ChatSession = {
-      id: user.id,
-      user,
-      lastMessage: status === 'active' ? 'You matched! Say hi 👋' : 'Waiting for response...',
-      timestamp: Date.now(),
-      status
-    };
-
-    const updatedChats = [newChat, ...chats];
-    await AsyncStorage.setItem(CHATS_KEY, JSON.stringify(updatedChats));
+     // Legacy/Fallback support
+     // In new flow, this is handled by ApiService.likeUser directly in DatePortalView
+     console.log('ChatService.addChat called - prefer using ApiService.likeUser');
   }
 
   // Get incoming requests (notifications)
   async getIncomingRequests(): Promise<ConnectionRequest[]> {
     try {
-      const data = await AsyncStorage.getItem(REQUESTS_KEY);
-      if (data) return JSON.parse(data);
-      
-      // Initialize with mock data if empty (Simulated "The Date" liking "Me")
-      const initialMockRequests: ConnectionRequest[] = [
-        {
-          id: 'req_1',
-          fromUser: USERS.find(u => u.name === 'Sophia') || USERS[0],
-          timestamp: Date.now() - 3600000,
-          status: 'pending' as const
-        },
-        {
-            id: 'req_2',
-            fromUser: USERS.find(u => u.name === 'Mia') || USERS[3],
-            timestamp: Date.now() - 7200000,
-            status: 'pending' as const
-        }
-      ].filter(req => req.fromUser); // Ensure user exists
+      const chats = await this.getChats();
+      const profileString = await AsyncStorage.getItem('userProfile');
+      if (!profileString) return [];
+      const profile = JSON.parse(profileString);
 
-      await AsyncStorage.setItem(REQUESTS_KEY, JSON.stringify(initialMockRequests));
-      return initialMockRequests;
+      // Filter for pending matches where I am NOT the initiator (meaning someone sent it to me)
+      return chats
+        .filter(c => c.status === 'pending' && String(c.initiatorId) !== String(profile.id))
+        .map(c => ({
+            id: c.id,
+            fromUser: c.user,
+            timestamp: c.timestamp,
+            status: 'pending'
+        }));
     } catch (error) {
-      console.error('Error getting requests:', error);
+      console.error('Error getting incoming requests:', error);
       return [];
     }
   }
 
   // Accept an incoming request
   async acceptRequest(requestId: string): Promise<void> {
-    const requests = await this.getIncomingRequests();
-    const request = requests.find(r => r.id === requestId);
-    
-    if (request) {
-      // Add to chats as active
-      await this.addChat(request.fromUser, 'active');
-      
-      // Remove from requests
-      const updatedRequests = requests.filter(r => r.id !== requestId);
-      await AsyncStorage.setItem(REQUESTS_KEY, JSON.stringify(updatedRequests));
-    }
+    await ApiService.acceptMatch(requestId);
   }
 
   // Reject an incoming request
   async rejectRequest(requestId: string): Promise<void> {
-    const requests = await this.getIncomingRequests();
-    const updatedRequests = requests.filter(r => r.id !== requestId);
-    await AsyncStorage.setItem(REQUESTS_KEY, JSON.stringify(updatedRequests));
+    await ApiService.declineMatch(requestId);
   }
 
   // Clear all data (helper)
