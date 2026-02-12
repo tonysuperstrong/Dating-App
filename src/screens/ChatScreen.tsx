@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useMemo } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, RefreshControl, Image, Alert, ActivityIndicator } from 'react-native';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -30,10 +30,8 @@ export default function ChatScreen() {
     });
   }, [navigation, currentUserId]);
 
-  const loadChats = async () => {
+  const loadChats = useCallback(async () => {
     try {
-        console.log('ChatScreen: Loading chats...');
-        
         // 1. Get Current User ID first
         const profileString = await AsyncStorage.getItem('userProfile');
         let myId = currentUserId;
@@ -45,19 +43,12 @@ export default function ChatScreen() {
 
         // 2. Get Chats
         const data = await ChatService.getChats();
-        console.log(`ChatScreen: Loaded ${data.length} chats. My ID: ${myId}`);
         
-        // Debug logs
-        data.forEach(c => {
-             const isPendingOutgoing = c.status === 'pending' && String(c.initiatorId) === String(myId);
-             console.log(` - Chat: ${c.id}, Status: ${c.status}, Init: ${c.initiatorId}, Show: ${isPendingOutgoing || c.status === 'active'}`);
-        });
-
         setChats(data);
     } catch (error) {
         console.error('Error loading chats:', error);
     }
-  };
+  }, [currentUserId]);
 
   useEffect(() => {
     // Initial load
@@ -67,16 +58,16 @@ export default function ChatScreen() {
   useFocusEffect(
     useCallback(() => {
       loadChats();
-    }, [])
+    }, [loadChats])
   );
 
-  const onRefresh = async () => {
+  const onRefresh = useCallback(async () => {
       setRefreshing(true);
       await loadChats();
       setRefreshing(false);
-  };
+  }, [loadChats]);
 
-  const handleAccept = async (matchId: string) => {
+  const handleAccept = useCallback(async (matchId: string) => {
     if (processingReqId) return;
     setProcessingReqId(matchId);
     try {
@@ -92,9 +83,9 @@ export default function ChatScreen() {
     } finally {
        setProcessingReqId(null);
     }
-  };
+  }, [processingReqId, loadChats]);
 
-  const handleDecline = async (matchId: string) => {
+  const handleDecline = useCallback(async (matchId: string) => {
     if (processingReqId) return;
     setProcessingReqId(matchId);
     try {
@@ -109,21 +100,16 @@ export default function ChatScreen() {
     } finally {
        setProcessingReqId(null);
     }
-  };
+  }, [processingReqId, loadChats]);
 
   // Filter logic
-  const incomingRequests = chats.filter(c => c.status === 'pending' && String(c.initiatorId) !== String(currentUserId));
-  const activeChats = chats.filter(c => c.status === 'active' || (c.status === 'pending' && String(c.initiatorId) === String(currentUserId)));
+  const incomingRequests = useMemo(() => chats.filter(c => c.status === 'pending' && String(c.initiatorId) !== String(currentUserId)), [chats, currentUserId]);
+  const activeChats = useMemo(() => chats.filter(c => c.status === 'active' || (c.status === 'pending' && String(c.initiatorId) === String(currentUserId))), [chats, currentUserId]);
 
-  // DEBUG INFO
-  console.log(`ChatScreen Render: Me=${currentUserId}, Total=${chats.length}, Active=${activeChats.length}, Incoming=${incomingRequests.length}`);
-
-  const renderItem = ({ item }: { item: ChatSession }) => {
+  const renderItem = useCallback(({ item }: { item: ChatSession }) => {
     const isColor = item.user.image && item.user.image.startsWith('#');
     const isPendingOutgoing = item.status === 'pending' && String(item.initiatorId) === String(currentUserId);
     
-    console.log(`Render ChatItem: ${item.user.name}, Status: ${item.status}, IsPendingOutgoing: ${isPendingOutgoing}`);
-
     return (
       <TouchableOpacity 
         style={[styles.matchItem, isPendingOutgoing && styles.pendingItem]}
@@ -158,9 +144,9 @@ export default function ChatScreen() {
         </View>
       </TouchableOpacity>
     );
-  };
+  }, [currentUserId, navigation]);
 
-  const renderRequestItem = ({ item }: { item: ChatSession }) => {
+  const renderRequestItem = useCallback(({ item }: { item: ChatSession }) => {
     const isColor = item.user.image && item.user.image.startsWith('#');
     const isProcessing = processingReqId === item.id;
 
@@ -195,7 +181,7 @@ export default function ChatScreen() {
              </View>
         </View>
     );
-  };
+  }, [processingReqId, handleDecline, handleAccept]);
 
   if (!currentUserId) {
     return (

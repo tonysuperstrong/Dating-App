@@ -8,6 +8,9 @@ const mockUser = {
   age: 25,
   bio: 'This is a test bio',
   image: '#000000',
+  type: 'date' as const,
+  location: 'New York, USA',
+  hobbies: ['Coding', 'Music'],
 };
 
 describe('Card Component', () => {

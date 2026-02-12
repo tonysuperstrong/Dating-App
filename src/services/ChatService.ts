@@ -1,9 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { User, USERS } from '../data/users';
+import { User } from '../data/users';
 import ApiService from './ApiService';
-
-const CHATS_KEY = 'user_chats';
-const REQUESTS_KEY = 'incoming_requests';
 
 export interface ChatSession {
   id: string; // match.id
@@ -12,6 +9,7 @@ export interface ChatSession {
   timestamp: number;
   status: 'active' | 'pending';
   initiatorId: string;
+  lastMessageSenderId?: string;
 }
 
 export interface ConnectionRequest {
@@ -23,14 +21,18 @@ export interface ConnectionRequest {
 
 class ChatService {
   // Get all active chats
-  async getChats(): Promise<ChatSession[]> {
+  async getChats(currentUserId?: string): Promise<ChatSession[]> {
     try {
       // Get current user ID
-      const profileString = await AsyncStorage.getItem('userProfile');
-      if (!profileString) return [];
-      const profile = JSON.parse(profileString);
+      let profileId = currentUserId;
+      if (!profileId) {
+        const profileString = await AsyncStorage.getItem('userProfile');
+        if (!profileString) return [];
+        const profile = JSON.parse(profileString);
+        profileId = profile.id;
+      }
       
-      const matches = await ApiService.getMatches(profile.id);
+      const matches = await ApiService.getMatches(profileId as string);
       
       // Map backend matches to ChatSession
       const sessions = matches.map((m: any) => ({
@@ -39,10 +41,25 @@ class ChatService {
         lastMessage: m.lastMessage || 'Start chatting!',
         timestamp: m.timestamp || Date.now(),
         status: m.status,
-        initiatorId: m.user1_id
+        initiatorId: m.user1_id,
+        lastMessageSenderId: m.lastMessageSenderId
       }));
-      console.log('ChatService: Mapped sessions:', JSON.stringify(sessions, null, 2));
-      return sessions;
+
+      // Sort by timestamp descending (newest first)
+      sessions.sort((a: ChatSession, b: ChatSession) => b.timestamp - a.timestamp);
+
+      // Deduplicate sessions by Partner ID (user.id)
+      // This ensures we only show one chat per person, even if multiple matches exist
+      const uniqueSessionsMap = new Map();
+      sessions.forEach((s: ChatSession) => {
+          if (!uniqueSessionsMap.has(s.user.id)) {
+              uniqueSessionsMap.set(s.user.id, s);
+          }
+      });
+      
+      const uniqueSessions = Array.from(uniqueSessionsMap.values()) as ChatSession[];
+      
+      return uniqueSessions;
     } catch (error) {
       console.error('Error getting chats:', error);
       return [];
@@ -50,23 +67,25 @@ class ChatService {
   }
 
   // Add a chat (when I like someone, or accept a request)
-  async addChat(user: User, status: 'active' | 'pending' = 'pending'): Promise<void> {
-     // Legacy/Fallback support
-     // In new flow, this is handled by ApiService.likeUser directly in DatePortalView
-     console.log('ChatService.addChat called - prefer using ApiService.likeUser');
-  }
+  // Legacy/Fallback support - removed
+  // async addChat(user: User, status: 'active' | 'pending' = 'pending'): Promise<void> {}
 
   // Get incoming requests (notifications)
-  async getIncomingRequests(): Promise<ConnectionRequest[]> {
+  async getIncomingRequests(currentUserId?: string): Promise<ConnectionRequest[]> {
     try {
-      const chats = await this.getChats();
-      const profileString = await AsyncStorage.getItem('userProfile');
-      if (!profileString) return [];
-      const profile = JSON.parse(profileString);
+      let profileId = currentUserId;
+      if (!profileId) {
+        const profileString = await AsyncStorage.getItem('userProfile');
+        if (!profileString) return [];
+        const profile = JSON.parse(profileString);
+        profileId = profile.id;
+      }
+
+      const chats = await this.getChats(profileId);
 
       // Filter for pending matches where I am NOT the initiator (meaning someone sent it to me)
       return chats
-        .filter(c => c.status === 'pending' && String(c.initiatorId) !== String(profile.id))
+        .filter(c => c.status === 'pending' && String(c.initiatorId) !== String(profileId))
         .map(c => ({
             id: c.id,
             fromUser: c.user,
@@ -91,8 +110,7 @@ class ChatService {
 
   // Clear all data (helper)
   async clearAll() {
-      await AsyncStorage.removeItem(CHATS_KEY);
-      await AsyncStorage.removeItem(REQUESTS_KEY);
+      // No local storage for chats anymore
   }
 }
 

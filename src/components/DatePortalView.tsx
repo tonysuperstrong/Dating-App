@@ -17,13 +17,15 @@ import {
   Share,
   Animated,
   Vibration,
-  ViewToken
+  ViewToken,
+  ActivityIndicator
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import * as ImagePicker from 'expo-image-picker';
 import { Audio } from 'expo-av';
 import * as Haptics from 'expo-haptics';
+import { Ionicons } from '@expo/vector-icons';
 import ApiService from '../services/ApiService';
 import SwipeDeck from './SwipeDeck';
 
@@ -71,12 +73,149 @@ interface UserRecommendation {
   location?: string;
 }
 
+const formatRelativeTime = (timestamp: number) => {
+  const now = Date.now();
+  const diff = now - timestamp;
+  const seconds = Math.floor(diff / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+  const weeks = Math.floor(days / 7);
+
+  if (seconds < 60) return 'now';
+  if (minutes < 60) return `${minutes}m`;
+  if (hours < 24) return `${hours}h`;
+  if (days < 7) return `${days}d`;
+  return `${weeks}w`;
+};
+
+const PostItem = React.memo(({ 
+  item, 
+  isPlaying, 
+  isAnimating, 
+  scaleValue, 
+  onLike, 
+  onComment, 
+  onShare, 
+  onPlayMusic, 
+  navigation 
+}: {
+  item: Post;
+  isPlaying: boolean;
+  isAnimating: boolean;
+  scaleValue: Animated.Value;
+  onLike: (id: string) => void;
+  onComment: (id: string) => void;
+  onShare: (post: Post) => void;
+  onPlayMusic: (url: string, id: string) => void;
+  navigation: any;
+}) => {
+    const isUserColor = item.user_image && item.user_image.startsWith('#');
+    
+    return (
+      <View style={styles.postContainer}>
+        {/* Post Header */}
+        <View style={styles.postHeader}>
+          <View style={styles.userInfo}>
+            <TouchableOpacity onPress={() => {
+                if (item.user_id) {
+                    console.log('[DatePortalView] Navigating to profile:', item.user_id);
+                    navigation.navigate('Profile', { userId: item.user_id });
+                } else {
+                    console.warn('[DatePortalView] Missing user_id for post:', item.id);
+                }
+            }}>
+                {isUserColor ? (
+                <View style={[styles.avatar, { backgroundColor: item.user_image }]}>
+                    <Text style={styles.avatarText}>{item.username?.[0]?.toUpperCase() || '?'}</Text>
+                </View>
+                ) : (
+                <Image source={{ uri: item.user_image }} style={styles.avatar} />
+                )}
+            </TouchableOpacity>
+            <View>
+                <Text style={styles.username}>{item.name}</Text>
+                {item.song ? (
+                    <TouchableOpacity 
+                        style={styles.songContainer} 
+                        onPress={() => item.song_preview ? onPlayMusic(item.song_preview, item.id) : null}
+                        disabled={!item.song_preview}
+                    >
+                        <Text style={[styles.songTag, isPlaying && styles.playingSong]}>
+                            {isPlaying ? '🔊 Playing: ' : '🎵 '}{item.song}
+                        </Text>
+                    </TouchableOpacity>
+                ) : null}
+            </View>
+          </View>
+          <Text style={styles.timestamp}>{new Date(Number(item.timestamp)).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' })}</Text>
+        </View>
+
+        {/* Post Images (Horizontal Scroll) */}
+        <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.imageScroll}>
+          {item.images.map((img, index) => (
+            <Image key={index} source={{ uri: img }} style={styles.postImage} resizeMode="cover" />
+          ))}
+        </ScrollView>
+        {item.images.length > 1 && (
+            <View style={styles.paginationDots}>
+                {item.images.map((_, i) => (
+                    <View key={i} style={[styles.dot, i === 0 ? styles.activeDot : null]} />
+                ))}
+            </View>
+        )}
+
+        {/* Post Actions & Content */}
+        <View style={styles.postFooter}>
+          <View style={styles.actions}>
+            <TouchableOpacity onPress={() => onLike(item.id)} style={styles.actionButton}>
+              <Animated.Text style={[
+                styles.actionIcon, 
+                { transform: [{ scale: isAnimating ? scaleValue : 1 }] }
+              ]}>
+                {item.isLiked ? '❤️' : '🤍'}
+              </Animated.Text>
+              <Text style={styles.likesCount}>{item.likes} likes</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.actionButton} onPress={() => onComment(item.id)}>
+              <Text style={styles.actionIcon}>💬</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity style={styles.actionButton} onPress={() => onShare(item)}>
+              <Text style={styles.actionIcon}>🚀</Text>
+            </TouchableOpacity>
+          </View>
+          
+          <Text style={styles.description}>
+            <Text style={styles.boldUsername}>{item.username}</Text> {item.description}
+          </Text>
+          
+          <TouchableOpacity onPress={() => onComment(item.id)}>
+             <Text style={styles.viewComments}>View all comments</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+}, (prevProps, nextProps) => {
+    return (
+        prevProps.item === nextProps.item &&
+        prevProps.isPlaying === nextProps.isPlaying &&
+        prevProps.isAnimating === nextProps.isAnimating
+    );
+});
+
 export default function DatePortalView() {
   const navigation = useNavigation();
   const [posts, setPosts] = useState<Post[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [userProfile, setUserProfile] = useState<any>(null);
   const [viewMode, setViewMode] = useState<'feed' | 'swipe'>('feed');
+
+  // Pagination State
+  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   
   // New Sections State
   const [todayEvents, setTodayEvents] = useState<ScheduleEvent[]>([]);
@@ -100,6 +239,12 @@ export default function DatePortalView() {
   const [sound, setSound] = useState<Audio.Sound | null>(null);
   const soundRef = useRef<Audio.Sound | null>(null);
   const [playingPostId, setPlayingPostId] = useState<string | null>(null);
+  const playingPostIdRef = useRef<string | null>(null);
+  
+  useEffect(() => {
+    playingPostIdRef.current = playingPostId;
+  }, [playingPostId]);
+
   const [viewablePostId, setViewablePostId] = useState<string | null>(null);
 
   // Animation State
@@ -140,7 +285,7 @@ export default function DatePortalView() {
   useFocusEffect(
     useCallback(() => {
       loadScheduleAndRecommendations();
-    }, [])
+    }, [userProfile])
   );
 
   const loadScheduleAndRecommendations = async () => {
@@ -160,13 +305,23 @@ export default function DatePortalView() {
             setTodayEvents(todays);
         }
 
+        // Get user ID properly to ensure exclusion works
+        let currentUserId = userProfile?.id;
+        if (!currentUserId) {
+             const profileString = await AsyncStorage.getItem('userProfile');
+             if (profileString) {
+                 const p = JSON.parse(profileString);
+                 currentUserId = p.id;
+             }
+        }
+
         // Load Recommendations (Mock fetch from API for now, or real if endpoint ready)
         // Using existing getUsers from ApiService which fetches potential matches
-        const users = await ApiService.getUsers(userProfile?.id);
+        const users = await ApiService.getUsers(currentUserId);
         if (users && users.length > 0) {
             // Filter out current user and map to recommendation format
             const recs = users
-                .filter((u: any) => u.id !== userProfile?.id)
+                .filter((u: any) => u.id !== currentUserId)
                 .slice(0, 10) // Limit to 10
                 .map((u: any) => ({
                     id: u.id,
@@ -182,7 +337,7 @@ export default function DatePortalView() {
     }
   };
 
-  const loadData = async () => {
+  const loadData = useCallback(async () => {
     try {
       const profileString = await AsyncStorage.getItem('userProfile');
       let profileId = undefined;
@@ -191,30 +346,64 @@ export default function DatePortalView() {
         setUserProfile(profile);
         profileId = profile.id;
       }
-      loadPosts(profileId);
+      loadInitialPosts(profileId);
     } catch (error) {
-      console.error('Error loading data:', error);
+      // console.error('Error loading data:', error);
     }
-  };
+  }, []);
 
-  const loadPosts = async (userId?: string) => {
+  const loadInitialPosts = useCallback(async (userId?: string) => {
     try {
-      // Use passed userId or fallback to state (for pull-to-refresh)
       const currentUserId = userId || userProfile?.id;
-      const fetchedPosts = await ApiService.getPosts(currentUserId);
-      setPosts(fetchedPosts);
+      // Reset to page 1
+      const fetchedPosts = await ApiService.getPosts(currentUserId, undefined, false, 1, 10);
+      
+      // Filter potential duplicates within the fetched batch itself (paranoid check)
+      const uniquePosts = Array.from(new Map(fetchedPosts.map((item: Post) => [item.id, item])).values());
+      
+      setPosts(uniquePosts as Post[]);
+      setHasMore(fetchedPosts.length === 10);
+      setPage(1); // Keep page at 1, so next load calls page + 1 = 2
     } catch (error) {
-      console.error('Failed to load posts', error);
+      // console.error('Failed to load posts', error);
     }
-  };
+  }, [userProfile]);
 
-  const onRefresh = async () => {
+  const handleLoadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    
+    setLoadingMore(true);
+    try {
+        const currentUserId = userProfile?.id;
+        const nextPage = page + 1; 
+        const fetchedPosts = await ApiService.getPosts(currentUserId, undefined, false, nextPage, 10);
+        
+        if (fetchedPosts.length > 0) {
+            setPosts(prev => {
+                const existingIds = new Set(prev.map(p => p.id));
+                const newPosts = fetchedPosts.filter((p: Post) => !existingIds.has(p.id));
+                return [...prev, ...newPosts];
+            });
+            setPage(nextPage);
+        }
+        
+        if (fetchedPosts.length < 10) {
+            setHasMore(false);
+        }
+    } catch (error) {
+        // console.error('Failed to load more posts', error);
+    } finally {
+        setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore, page, userProfile]);
+
+  const onRefresh = useCallback(async () => {
     setRefreshing(true);
-    await loadPosts();
+    await loadInitialPosts();
     setRefreshing(false);
-  };
+  }, [loadInitialPosts]);
 
-  const handlePickImages = async () => {
+  const handlePickImages = useCallback(async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsMultipleSelection: true,
@@ -225,9 +414,16 @@ export default function DatePortalView() {
     if (!result.canceled) {
       setNewPostImages([...newPostImages, ...result.assets.map(asset => asset.uri)]);
     }
-  };
+  }, [newPostImages]);
 
-  const handleCreatePost = async () => {
+  const resetPostForm = useCallback(() => {
+    setNewPostDescription('');
+    setNewPostSong('');
+    setNewPostImages([]);
+    setIsPosting(false);
+  }, []);
+
+  const handleCreatePost = useCallback(async () => {
     if (newPostImages.length === 0) {
       Alert.alert('Missing Image', 'Please select at least one photo for your post.');
       return;
@@ -262,19 +458,17 @@ export default function DatePortalView() {
 
       await ApiService.createPost(postData);
       
-      setNewPostDescription('');
-      setNewPostSong('');
-      setNewPostImages([]);
+      resetPostForm();
       setCreateModalVisible(false);
-      loadPosts();
+      loadInitialPosts();
     } catch (error) {
       Alert.alert('Error', 'Failed to create post. Please try again.');
     } finally {
       setIsPosting(false);
     }
-  };
+  }, [newPostImages, newPostDescription, newPostSong, userProfile, resetPostForm, loadInitialPosts]);
 
-  const handleLikePost = async (postId: string) => {
+  const handleLikePost = useCallback(async (postId: string) => {
     if (!userProfile?.id) return;
 
     // Haptic Feedback
@@ -310,22 +504,22 @@ export default function DatePortalView() {
     } catch (error) {
       console.error('Failed to like post', error);
     }
-  };
+  }, [userProfile]);
 
-  const stopMusic = async () => {
+  const stopMusic = useCallback(async () => {
     if (soundRef.current) {
         try {
             await soundRef.current.unloadAsync();
         } catch (error) {
-            console.log('Error unloading sound', error);
+            // Ignore unload errors
         }
         soundRef.current = null;
         setSound(null);
         setPlayingPostId(null);
     }
-  };
+  }, []);
 
-  const playMusic = async (previewUrl: string, postId: string) => {
+  const playMusic = useCallback(async (previewUrl: string, postId: string) => {
     try {
       await stopMusic();
 
@@ -346,19 +540,19 @@ export default function DatePortalView() {
         }
       });
     } catch (error) {
-      console.error('Error playing sound:', error);
+      // console.error('Error playing sound:', error);
     }
-  };
+  }, [stopMusic]);
 
-  const handlePlayMusic = async (previewUrl: string, postId: string) => {
-    if (playingPostId === postId) {
+  const handlePlayMusic = useCallback(async (previewUrl: string, postId: string) => {
+    if (playingPostIdRef.current === postId) {
         await stopMusic();
     } else {
         await playMusic(previewUrl, postId);
     }
-  };
+  }, [stopMusic, playMusic]);
 
-  const handleShare = async (post: Post) => {
+  const handleShare = useCallback(async (post: Post) => {
     try {
         const result = await Share.share({
             message: `Check out ${post.name}'s post: "${post.description}" ${post.song ? `🎵 Listening to ${post.song}` : ''}`,
@@ -366,11 +560,11 @@ export default function DatePortalView() {
             url: post.images[0] // iOS only
         });
     } catch (error) {
-        console.error(error);
+        // console.error(error);
     }
-  };
+  }, []);
 
-  const openComments = async (postId: string) => {
+  const openComments = useCallback(async (postId: string) => {
     setActivePostId(postId);
     setCommentsModalVisible(true);
     setLoadingComments(true);
@@ -378,13 +572,13 @@ export default function DatePortalView() {
         const fetchedComments = await ApiService.getComments(postId);
         setComments(fetchedComments);
     } catch (error) {
-        console.error('Error fetching comments:', error);
+        // console.error('Error fetching comments:', error);
     } finally {
         setLoadingComments(false);
     }
-  };
+  }, []);
 
-  const handleSubmitComment = async () => {
+  const handleSubmitComment = useCallback(async () => {
     if (!newCommentText.trim() || !activePostId || !userProfile) return;
 
     try {
@@ -405,98 +599,23 @@ export default function DatePortalView() {
     } catch (error) {
         Alert.alert('Error', 'Failed to post comment');
     }
-  };
+  }, [newCommentText, activePostId, userProfile, comments]);
 
-  const renderPost = ({ item }: { item: Post }) => {
-    const isUserColor = item.user_image && item.user_image.startsWith('#');
-    const isPlaying = playingPostId === item.id;
-    const isAnimating = animatingPostId === item.id;
-    
-    return (
-      <View style={styles.postContainer}>
-        {/* Post Header */}
-        <View style={styles.postHeader}>
-          <View style={styles.userInfo}>
-            <TouchableOpacity onPress={() => {
-                if (item.user_id) {
-                    (navigation as any).navigate('Profile', { userId: item.user_id });
-                }
-            }}>
-                {isUserColor ? (
-                <View style={[styles.avatar, { backgroundColor: item.user_image }]}>
-                    <Text style={styles.avatarText}>{item.username?.[0]?.toUpperCase() || '?'}</Text>
-                </View>
-                ) : (
-                <Image source={{ uri: item.user_image }} style={styles.avatar} />
-                )}
-            </TouchableOpacity>
-            <View>
-                <Text style={styles.username}>{item.name}</Text>
-                {item.song ? (
-                    <TouchableOpacity 
-                        style={styles.songContainer} 
-                        onPress={() => item.song_preview ? handlePlayMusic(item.song_preview, item.id) : null}
-                        disabled={!item.song_preview}
-                    >
-                        <Text style={[styles.songTag, isPlaying && styles.playingSong]}>
-                            {isPlaying ? '🔊 Playing: ' : '🎵 '}{item.song}
-                        </Text>
-                    </TouchableOpacity>
-                ) : null}
-            </View>
-          </View>
-          <Text style={styles.timestamp}>{new Date(item.timestamp).toLocaleDateString()}</Text>
-        </View>
+  const renderPost = useCallback(({ item }: { item: Post }) => (
+    <PostItem
+        item={item}
+        isPlaying={playingPostId === item.id}
+        isAnimating={animatingPostId === item.id}
+        scaleValue={scaleValue}
+        onLike={handleLikePost}
+        onComment={openComments}
+        onShare={handleShare}
+        onPlayMusic={handlePlayMusic}
+        navigation={navigation}
+    />
+  ), [playingPostId, animatingPostId, scaleValue, handleLikePost, openComments, handleShare, handlePlayMusic, navigation]);
 
-        {/* Post Images (Horizontal Scroll) */}
-        <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.imageScroll}>
-          {item.images.map((img, index) => (
-            <Image key={index} source={{ uri: img }} style={styles.postImage} resizeMode="cover" />
-          ))}
-        </ScrollView>
-        {item.images.length > 1 && (
-            <View style={styles.paginationDots}>
-                {item.images.map((_, i) => (
-                    <View key={i} style={[styles.dot, i === 0 ? styles.activeDot : null]} />
-                ))}
-            </View>
-        )}
-
-        {/* Post Actions & Content */}
-        <View style={styles.postFooter}>
-          <View style={styles.actions}>
-            <TouchableOpacity onPress={() => handleLikePost(item.id)} style={styles.actionButton}>
-              <Animated.Text style={[
-                styles.actionIcon, 
-                { transform: [{ scale: isAnimating ? scaleValue : 1 }] }
-              ]}>
-                {item.isLiked ? '❤️' : '🤍'}
-              </Animated.Text>
-              <Text style={styles.likesCount}>{item.likes} likes</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.actionButton} onPress={() => openComments(item.id)}>
-              <Text style={styles.actionIcon}>💬</Text>
-            </TouchableOpacity>
-            
-            <TouchableOpacity style={styles.actionButton} onPress={() => handleShare(item)}>
-              <Text style={styles.actionIcon}>🚀</Text>
-            </TouchableOpacity>
-          </View>
-          
-          <Text style={styles.description}>
-            <Text style={styles.boldUsername}>{item.username}</Text> {item.description}
-          </Text>
-          
-          <TouchableOpacity onPress={() => openComments(item.id)}>
-             <Text style={styles.viewComments}>View all comments</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
-  };
-
-  const renderComment = ({ item }: { item: Comment }) => {
+  const renderComment = useCallback(({ item }: { item: Comment }) => {
     const isUserColor = item.user_image && item.user_image.startsWith('#');
     return (
         <View style={styles.commentItem}>
@@ -514,13 +633,26 @@ export default function DatePortalView() {
                 <Image source={{ uri: item.user_image }} style={styles.commentAvatar} />
                 )}
             </TouchableOpacity>
+            
             <View style={styles.commentContent}>
-                <Text style={styles.commentUsername}>{item.username} <Text style={styles.commentText}>{item.text}</Text></Text>
-                <Text style={styles.commentTime}>{new Date(item.timestamp).toLocaleDateString()}</Text>
+                <Text style={styles.commentUsername}>{item.username}</Text>
+                <Text style={styles.commentTextContainer}>
+                    <Text style={styles.commentText}>{item.text}</Text>
+                </Text>
+                <View style={styles.commentMetaContainer}>
+                    <Text style={styles.commentTime}>{formatRelativeTime(Number(item.timestamp))}</Text>
+                    <TouchableOpacity>
+                        <Text style={styles.replyText}>Reply</Text>
+                    </TouchableOpacity>
+                </View>
             </View>
+
+            <TouchableOpacity style={styles.commentLikeButton}>
+                <Ionicons name="heart-outline" size={14} color="#666" />
+            </TouchableOpacity>
         </View>
     );
-  };
+  }, [navigation]);
 
   // Viewability Config
   const viewabilityConfig = useRef({
@@ -533,7 +665,7 @@ export default function DatePortalView() {
     }
   }).current;
 
-  const renderHeader = () => (
+  const renderHeader = useCallback(() => (
     <View>
         {/* Recommendations Section */}
         <View style={styles.sectionContainer}>
@@ -591,7 +723,7 @@ export default function DatePortalView() {
 
         <Text style={[styles.sectionTitle, { marginHorizontal: 15, marginTop: 10 }]}>Latest Posts</Text>
     </View>
-  );
+  ), [recommendations, todayEvents, navigation]);
 
   return (
     <View style={styles.container}>
@@ -631,6 +763,9 @@ export default function DatePortalView() {
             }
             viewabilityConfig={viewabilityConfig}
             onViewableItemsChanged={onViewableItemsChanged}
+            onEndReached={handleLoadMore}
+            onEndReachedThreshold={0.5}
+            ListFooterComponent={loadingMore ? <ActivityIndicator style={{ padding: 20 }} /> : null}
         />
       ) : (
         <View style={styles.swipeContainer}>
@@ -655,7 +790,10 @@ export default function DatePortalView() {
             style={styles.modalContainer}
         >
             <View style={styles.modalHeader}>
-                <TouchableOpacity onPress={() => setCreateModalVisible(false)}>
+                <TouchableOpacity onPress={() => {
+                    resetPostForm();
+                    setCreateModalVisible(false);
+                }}>
                     <Text style={styles.cancelText}>Cancel</Text>
                 </TouchableOpacity>
                 <Text style={styles.modalTitle}>New Post</Text>
@@ -702,43 +840,58 @@ export default function DatePortalView() {
       <Modal
         visible={commentsModalVisible}
         animationType="slide"
-        presentationStyle="pageSheet"
+        transparent={true}
         onRequestClose={() => setCommentsModalVisible(false)}
       >
-          <View style={styles.modalContainer}>
-            <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Comments</Text>
-                <TouchableOpacity onPress={() => setCommentsModalVisible(false)}>
-                    <Text style={styles.cancelText}>Close</Text>
-                </TouchableOpacity>
-            </View>
-            
-            <FlatList
-                data={comments}
-                renderItem={renderComment}
-                keyExtractor={item => item.id}
-                contentContainerStyle={styles.commentsList}
-                ListEmptyComponent={
-                    <Text style={styles.emptyText}>No comments yet.</Text>
-                }
+          <KeyboardAvoidingView 
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            style={styles.modalOverlay}
+          >
+            <TouchableOpacity 
+                style={styles.modalBackdrop} 
+                activeOpacity={1}
+                onPress={() => setCommentsModalVisible(false)}
             />
-            
-            <KeyboardAvoidingView 
-                behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-                keyboardVerticalOffset={Platform.OS === 'ios' ? 100 : 0}
-                style={styles.commentInputContainer}
-            >
-                <TextInput
-                    style={styles.commentInput}
-                    placeholder="Add a comment..."
-                    value={newCommentText}
-                    onChangeText={setNewCommentText}
+            <View style={styles.halfScreenContainer}>
+                <View style={styles.modalHeaderCenter}>
+                    <View style={styles.dragHandle} />
+                    <Text style={styles.modalTitleCenter}>Comments</Text>
+                </View>
+                
+                <FlatList
+                    data={comments}
+                    renderItem={renderComment}
+                    keyExtractor={item => item.id}
+                    contentContainerStyle={styles.commentsList}
+                    ListEmptyComponent={
+                        <Text style={styles.emptyText}>No comments yet.</Text>
+                    }
                 />
-                <TouchableOpacity onPress={handleSubmitComment} disabled={!newCommentText.trim()}>
-                    <Text style={[styles.postText, !newCommentText.trim() && styles.disabledText]}>Post</Text>
-                </TouchableOpacity>
-            </KeyboardAvoidingView>
-          </View>
+                
+                <View style={styles.commentInputContainer}>
+                    {userProfile?.image ? (
+                    userProfile.image.startsWith('#') ? (
+                        <View style={[styles.currentUserAvatar, { backgroundColor: userProfile.image }]}>
+                            <Text style={styles.currentUserAvatarText}>{userProfile.name?.[0]?.toUpperCase()}</Text>
+                        </View>
+                    ) : (
+                        <Image source={{ uri: userProfile.image }} style={styles.currentUserAvatar} />
+                    )
+                    ) : null}
+
+                    <TextInput
+                        style={styles.commentInput}
+                        placeholder={`Add a comment as ${userProfile?.name || '...'}`}
+                        placeholderTextColor="#999"
+                        value={newCommentText}
+                        onChangeText={setNewCommentText}
+                    />
+                    <TouchableOpacity onPress={handleSubmitComment} disabled={!newCommentText.trim()}>
+                        <Text style={[styles.postButtonText, !newCommentText.trim() && styles.disabledPostButtonText]}>Post</Text>
+                    </TouchableOpacity>
+                </View>
+            </View>
+          </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -901,6 +1054,21 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#fff',
   },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalBackdrop: {
+    flex: 1,
+  },
+  halfScreenContainer: {
+    height: '50%',
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    overflow: 'hidden',
+  },
   modalHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -997,13 +1165,14 @@ const styles = StyleSheet.create({
   },
   commentItem: {
     flexDirection: 'row',
-    marginBottom: 15,
+    alignItems: 'flex-start',
+    marginBottom: 20,
   },
   commentAvatar: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    marginRight: 10,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    marginRight: 12,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#eee',
@@ -1015,43 +1184,107 @@ const styles = StyleSheet.create({
   },
   commentContent: {
     flex: 1,
+    marginRight: 10,
+  },
+  commentTextContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    marginBottom: 4,
   },
   commentUsername: {
     fontWeight: 'bold',
     fontSize: 14,
+    marginRight: 5,
+    color: '#000',
   },
   commentText: {
-    fontWeight: 'normal',
+    fontSize: 14,
+    color: '#000',
+    lineHeight: 18,
+  },
+  commentMetaContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
   commentTime: {
     fontSize: 12,
     color: '#999',
-    marginTop: 2,
+    marginRight: 15,
   },
+  replyText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#666',
+  },
+  commentLikeButton: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 5,
+  },
+  
+  // Input Area Styles
   commentInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 15,
     paddingTop: 12,
-    paddingBottom: Platform.OS === 'ios' ? 50 : 20,
+    paddingBottom: Platform.OS === 'ios' ? 40 : 15, // Adjusted for safe area
     borderTopWidth: 1,
     borderTopColor: '#f0f0f0',
     backgroundColor: '#fff',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: -3 },
-    shadowOpacity: 0.1,
-    shadowRadius: 5,
-    elevation: 10,
+  },
+  currentUserAvatar: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 12,
+    backgroundColor: '#eee',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  currentUserAvatarText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#fff',
   },
   commentInput: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
-    borderRadius: 25,
-    paddingHorizontal: 20,
-    paddingVertical: 12,
-    marginRight: 12,
-    fontSize: 15,
+    backgroundColor: '#f0f0f0', // Light gray background like Insta
+    borderRadius: 20,
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    marginRight: 10,
+    fontSize: 14,
     maxHeight: 100,
+    color: '#000',
+  },
+  postButtonText: {
+    color: '#0095F6', // Instagram blue
+    fontWeight: '600',
+    fontSize: 14,
+  },
+  disabledPostButtonText: {
+    opacity: 0.3,
+  },
+
+  // Modal Header Styles
+  modalHeaderCenter: {
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#dbdbdb',
+  },
+  dragHandle: {
+    width: 40,
+    height: 4,
+    backgroundColor: '#dbdbdb',
+    borderRadius: 2,
+    marginBottom: 10,
+  },
+  modalTitleCenter: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#000',
   },
   // New Section Styles
   sectionContainer: {

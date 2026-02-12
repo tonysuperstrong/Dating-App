@@ -31,9 +31,26 @@ const fetchFromESPN = async (endpoint: string, leagueName: string): Promise<Game
   }
 };
 
+// Mock data for fallback when API fails or returns no games
+const MOCK_GAMES: Record<string, Game[]> = {
+  'NBA': [
+    { id: 'm1', name: 'Lakers at Warriors', shortName: 'LAL @ GSW', date: new Date().toISOString(), status: 'Scheduled', league: 'NBA' },
+    { id: 'm2', name: 'Celtics at Heat', shortName: 'BOS @ MIA', date: new Date().toISOString(), status: 'Scheduled', league: 'NBA' }
+  ],
+  'Soccer': [
+    { id: 'm3', name: 'Arsenal at Chelsea', shortName: 'ARS @ CHE', date: new Date().toISOString(), status: 'Scheduled', league: 'Premier League' },
+    { id: 'm4', name: 'Real Madrid at Barcelona', shortName: 'RMA @ BAR', date: new Date().toISOString(), status: 'Scheduled', league: 'La Liga' }
+  ],
+  'ATP': [
+    { id: 'm5', name: 'Alcaraz vs Sinner', shortName: 'ALC vs SIN', date: new Date().toISOString(), status: 'Scheduled', league: 'ATP' },
+    { id: 'm6', name: 'Djokovic vs Nadal', shortName: 'DJO vs NAD', date: new Date().toISOString(), status: 'Scheduled', league: 'ATP' }
+  ]
+};
+
 export const SportsService = {
   getNBAGames: async () => {
-    return fetchFromESPN('basketball/nba/scoreboard', 'NBA');
+    const games = await fetchFromESPN('basketball/nba/scoreboard', 'NBA');
+    return games.length > 0 ? games : MOCK_GAMES['NBA'];
   },
 
   getSoccerGames: async () => {
@@ -47,10 +64,12 @@ export const SportsService = {
 
     const promises = leagues.map(l => fetchFromESPN(l.code, l.name));
     const results = await Promise.all(promises);
-    return results.flat();
+    const games = results.flat();
+    return games.length > 0 ? games : MOCK_GAMES['Soccer'];
   },
 
   getTennisGames: async () => {
-    return fetchFromESPN('tennis/atp/scoreboard', 'ATP');
+    const games = await fetchFromESPN('tennis/atp/scoreboard', 'ATP');
+    return games.length > 0 ? games : MOCK_GAMES['ATP'];
   }
 };

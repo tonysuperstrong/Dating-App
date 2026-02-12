@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert, TextInput } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
@@ -6,7 +6,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as WebBrowser from 'expo-web-browser';
 import * as Google from 'expo-auth-session/providers/google';
 import * as Facebook from 'expo-auth-session/providers/facebook';
-import { ResponseType } from 'expo-auth-session';
 import ApiService from '../services/ApiService';
 
 WebBrowser.maybeCompleteAuthSession();
@@ -23,14 +22,15 @@ export default function LoginScreen() {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleCredentialsLogin = async () => {
+  const handleCredentialsLogin = useCallback(async () => {
     if (!username || !password) {
       Alert.alert('Error', 'Please enter username and password');
       return;
     }
 
     try {
-      const user = await ApiService.login(username, password);
+      // Trim inputs to avoid accidental spaces
+      const user = await ApiService.login(username.trim(), password.trim());
       if (user) {
         // Save user profile to AsyncStorage for app-wide use
         await AsyncStorage.setItem('userProfile', JSON.stringify(user));
@@ -39,17 +39,10 @@ export default function LoginScreen() {
         Alert.alert('Login Failed', 'Invalid credentials');
       }
     } catch (error) {
-      console.error('Login error', error);
+      // Login error
       Alert.alert('Login Failed', 'Invalid username or password');
     }
-  };
-
-  const handleSocialLogin = (provider: string) => {
-    // For now, bypass actual auth and go to ProfileSetup (or Home if profile exists)
-    // In a real app, you'd verify the token.
-    console.log(`Mock login with ${provider}`);
-    navigation.replace('ProfileSetup');
-  };
+  }, [username, password, navigation]);
 
   // --- Google Sign-In Setup ---
   // You need to generate these Client IDs in the Google Cloud Console:
@@ -72,28 +65,48 @@ export default function LoginScreen() {
     // Handle Google Response
     if (googleResponse?.type === 'success') {
       const { authentication } = googleResponse;
-      console.log('Google Login Success:', authentication);
+      // console.log('Google Login Success:', authentication);
       // In a real app, send authentication.accessToken to your backend
-      navigation.replace('ProfileSetup');
+      navigation.navigate('ProfileSetup');
     }
 
     // Handle Facebook Response
     if (facebookResponse?.type === 'success') {
       const { authentication } = facebookResponse;
-      console.log('Facebook Login Success:', authentication);
+      // console.log('Facebook Login Success:', authentication);
       // In a real app, send authentication.accessToken to your backend
-      navigation.replace('ProfileSetup');
+      navigation.navigate('ProfileSetup');
     }
   }, [googleResponse, facebookResponse]);
 
-  const handleLogin = async (provider: string) => {
+  const handleLogin = useCallback(async (provider: string) => {
     if (provider === 'Google') {
       // Check if we are using placeholder IDs
       if (!googleRequest || googleRequest?.clientId === 'YOUR_EXPO_CLIENT_ID' || googleRequest?.clientId === 'YOUR_IOS_CLIENT_ID') {
+         // Mock successful login for demo purposes
+         const mockUser = {
+            id: 'mock-google-user',
+            username: 'Google User',
+            image: 'https://via.placeholder.com/150',
+            bio: 'This is a demo account logged in via Google.',
+            hobbies: 'Coding, Testing',
+            country: 'Internet',
+            language: 'English',
+            ethnicity: 'AI',
+            gender: 'Non-binary',
+            age: '25'
+         };
+         
          Alert.alert(
            'Demo Mode', 
-           'Google Client IDs are not configured. Skipping authentication for demo purposes.',
-           [{ text: 'OK', onPress: () => navigation.replace('ProfileSetup') }]
+           'Google Client IDs are not configured. Simulating successful login...',
+           [{ 
+             text: 'OK', 
+             onPress: async () => {
+               await AsyncStorage.setItem('userProfile', JSON.stringify(mockUser));
+               navigation.replace('Home');
+             } 
+           }]
          );
          return;
       }
@@ -104,10 +117,30 @@ export default function LoginScreen() {
       }
     } else if (provider === 'Facebook') {
        if (!facebookRequest || facebookRequest?.clientId === 'YOUR_FACEBOOK_APP_ID') {
+         // Mock successful login for demo purposes
+         const mockUser = {
+            id: 'mock-facebook-user',
+            username: 'Facebook User',
+            image: 'https://via.placeholder.com/150',
+            bio: 'This is a demo account logged in via Facebook.',
+            hobbies: 'Social Media, Sharing',
+            country: 'Internet',
+            language: 'English',
+            ethnicity: 'AI',
+            gender: 'Non-binary',
+            age: '25'
+         };
+
          Alert.alert(
            'Demo Mode', 
-           'Facebook App ID is not configured. Skipping authentication for demo purposes.',
-           [{ text: 'OK', onPress: () => navigation.replace('ProfileSetup') }]
+           'Facebook App ID is not configured. Simulating successful login...',
+           [{ 
+             text: 'OK', 
+             onPress: async () => {
+               await AsyncStorage.setItem('userProfile', JSON.stringify(mockUser));
+               navigation.replace('Home');
+             } 
+           }]
          );
          return;
       }
@@ -121,7 +154,7 @@ export default function LoginScreen() {
       // which is often deprecated. For Expo Go, the best way is often via a generic OAuth flow or just linking manually.
       Alert.alert('Instagram Login', 'Instagram Login requires complex setup with the Instagram Basic Display API. Please use Google/Facebook for this demo.');
     }
-  };
+  }, [googleRequest, facebookRequest, promptGoogleAsync, promptFacebookAsync, navigation]);
 
   return (
     <View style={styles.container}>
@@ -146,6 +179,10 @@ export default function LoginScreen() {
         <TouchableOpacity style={styles.loginButton} onPress={handleCredentialsLogin}>
           <Text style={styles.loginButtonText}>Login</Text>
         </TouchableOpacity>
+
+        <TouchableOpacity style={styles.signupButton} onPress={() => navigation.navigate('ProfileSetup')}>
+            <Text style={styles.signupButtonText}>Don't have an account? Sign Up</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.divider}>
@@ -156,21 +193,21 @@ export default function LoginScreen() {
 
       <TouchableOpacity 
         style={[styles.button, styles.googleButton]}
-        onPress={() => handleSocialLogin('Google')}
+        onPress={() => handleLogin('Google')}
       >
         <Text style={[styles.buttonText, styles.googleText]}>Sign in with Google</Text>
       </TouchableOpacity>
 
       <TouchableOpacity 
         style={[styles.button, styles.facebookButton]}
-        onPress={() => handleSocialLogin('Facebook')}
+        onPress={() => handleLogin('Facebook')}
       >
         <Text style={styles.buttonText}>Sign in with Facebook</Text>
       </TouchableOpacity>
 
       <TouchableOpacity 
         style={[styles.button, styles.instagramButton]}
-        onPress={() => handleSocialLogin('Instagram')}
+        onPress={() => handleLogin('Instagram')}
       >
         <Text style={styles.buttonText}>Sign in with Instagram</Text>
       </TouchableOpacity>
@@ -199,7 +236,16 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 18,
     color: '#666',
-    marginBottom: 50,
+    marginBottom: 30,
+  },
+  signupButton: {
+      marginTop: 15,
+      alignItems: 'center',
+  },
+  signupButtonText: {
+      color: '#E94057',
+      fontSize: 16,
+      fontWeight: '600',
   },
   button: {
     paddingHorizontal: 20,

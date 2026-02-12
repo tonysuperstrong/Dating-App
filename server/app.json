@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "23d99931-b40f-4ceb-be01-c82959a37883"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.tonyleungdkkf.datingappbackend",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    }
+  }
+}

@@ -1,5 +1,10 @@
 import React, { useState, useCallback } from 'react';
-import { View, Text, StyleSheet, Image, TouchableOpacity, ScrollView, ActivityIndicator, Dimensions, Modal } from 'react-native';
+import { View, Text, StyleSheet, Image, TouchableOpacity, FlatList, ActivityIndicator, Dimensions, 
+  Modal, 
+  Alert 
+} from 'react-native';
+import { Audio } from 'expo-av';
+import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import ApiService from '../services/ApiService';
@@ -12,17 +17,19 @@ interface UserProfile {
   username?: string;
   password?: string;
   bio: string;
-  hobbies: string;
+  hobbies: string | string[];
   image: string;
-  country: string;
+  location: string;
   language: string;
   ethnicity: string;
   gender?: string;
   sport?: string;
-  age?: string;
+  age?: string | number;
   personality_type?: string;
   detailed_bio?: string;
   partner_preferences?: string;
+  favorite_teams?: any[];
+  voice_bio?: string;
 }
 
 export default function ProfileScreen() {
@@ -33,6 +40,7 @@ export default function ProfileScreen() {
   const [selectedImage, setSelectedImage] = useState<string | null>(null);
   const [isCurrentUser, setIsCurrentUser] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [sound, setSound] = useState<Audio.Sound | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -45,19 +53,34 @@ export default function ProfileScreen() {
           const targetUserId = route.params?.userId;
           let activeProfileId;
 
-          if (targetUserId && storedProfile && targetUserId !== storedProfile.id) {
-            // Viewing another user
-            setIsCurrentUser(false);
+          if (targetUserId) {
+            // Always fetch if userId is provided to ensure fresh data and handle guest mode
+            console.log('[ProfileScreen] Fetching profile for:', targetUserId);
             const user = await ApiService.getUserById(targetUserId);
+            
             if (user) {
+                console.log('[ProfileScreen] Fetched user:', user.username);
                 setProfile(user);
                 activeProfileId = user.id;
+                // Check if the fetched user is the current user
+                setIsCurrentUser(storedProfile && String(storedProfile.id) === String(user.id));
+            } else {
+                console.log('[ProfileScreen] Failed to fetch user, trying fallback');
+                // Fallback: if failed to fetch and it's us, use stored
+                if (storedProfile && String(targetUserId) === String(storedProfile.id)) {
+                    console.log('[ProfileScreen] Using stored profile fallback');
+                    setProfile(storedProfile);
+                    activeProfileId = storedProfile.id;
+                    setIsCurrentUser(true);
+                } else {
+                    Alert.alert('Error', 'Failed to load user profile');
+                }
             }
-          } else {
-            // Viewing self (or fallback)
+          } else if (storedProfile) {
+            // No userId provided, default to current user
             setIsCurrentUser(true);
             setProfile(storedProfile);
-            activeProfileId = storedProfile?.id;
+            activeProfileId = storedProfile.id;
           }
 
           if (activeProfileId) {
@@ -65,14 +88,14 @@ export default function ProfileScreen() {
               setPosts(fetchedPosts);
           }
         } catch (error) {
-          console.error('Failed to load profile', error);
-        } finally {
-            setLoading(false);
-        }
-      };
-      loadProfile();
-    }, [route.params?.userId])
-  );
+          // console.error('Failed to load profile', error);
+              } finally {
+                  setLoading(false);
+              }
+            };
+            loadProfile();
+          }, [route.params?.userId])
+        );
 
   const handleMessage = async () => {
       if (!profile || !profile.id) return;
@@ -104,27 +127,21 @@ export default function ProfileScreen() {
       }
   };
 
-  if (loading) {
-      return (
-          <View style={[styles.container, { justifyContent: 'center' }]}>
-              <ActivityIndicator size="large" color="#E94057" />
-          </View>
-      );
-  }
+  const playVoiceBio = async () => {
+      if (profile?.voice_bio) {
+          try {
+            const { sound } = await Audio.Sound.createAsync({ uri: profile.voice_bio });
+            setSound(sound);
+            await sound.playAsync();
+          } catch (error) {
+              console.log('Error playing sound', error);
+              Alert.alert('Error', 'Could not play voice bio');
+          }
+      }
+  };
 
-  if (!profile) {
-      return (
-          <View style={[styles.container, { justifyContent: 'center' }]}>
-              <Text style={{ fontSize: 18, color: '#666' }}>User not found</Text>
-              <TouchableOpacity onPress={() => navigation.goBack()} style={{ marginTop: 20 }}>
-                  <Text style={{ color: '#E94057', fontSize: 16 }}>Go Back</Text>
-              </TouchableOpacity>
-          </View>
-      );
-  }
-
-  return (
-    <ScrollView contentContainerStyle={styles.container}>
+  const renderHeader = useCallback(() => (
+    <>
       <View style={styles.avatarContainer}>
         {profile?.image && !profile.image.startsWith('#') ? (
           <Image source={{ uri: profile.image }} style={styles.avatar} />
@@ -138,6 +155,13 @@ export default function ProfileScreen() {
       <Text style={styles.name}>{profile?.username ? `@${profile.username}` : 'Profile'}</Text>
       <Text style={styles.bio}>{profile?.bio || 'No bio available.'}</Text>
 
+      {profile?.voice_bio && (
+          <TouchableOpacity style={styles.voiceBioButton} onPress={playVoiceBio}>
+              <Ionicons name="mic" size={20} color="white" />
+              <Text style={styles.voiceBioText}>Play Voice Bio</Text>
+          </TouchableOpacity>
+      )}
+
       {profile?.personality_type && (
           <View style={styles.personalityBadge}>
               <Text style={styles.personalityText}>✨ {profile.personality_type}</Text>
@@ -148,14 +172,14 @@ export default function ProfileScreen() {
         <View style={styles.infoContainer}>
           {profile.detailed_bio ? (
               <View style={styles.section}>
-                  <Text style={styles.sectionHeader}>About Me</Text>
+                  <Text style={styles.sectionTitle}>About Me</Text>
                   <Text style={styles.sectionContent}>{profile.detailed_bio}</Text>
               </View>
           ) : null}
 
           {profile.partner_preferences ? (
               <View style={styles.section}>
-                  <Text style={styles.sectionHeader}>Looking For</Text>
+                  <Text style={styles.sectionTitle}>Looking For</Text>
                   <Text style={styles.sectionContent}>{profile.partner_preferences}</Text>
               </View>
           ) : null}
@@ -165,20 +189,20 @@ export default function ProfileScreen() {
           {profile.age && (
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>🎂 Age:</Text>
-              <Text style={styles.infoValue}>{profile.age}</Text>
+              <Text style={styles.infoValue}>{profile.age.toString()}</Text>
             </View>
           )}
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>📍 Country:</Text>
-            <Text style={styles.infoValue}>{profile.country}</Text>
+            <Text style={styles.infoValue}>{profile.location || 'Not set'}</Text>
           </View>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>🗣 Language:</Text>
-            <Text style={styles.infoValue}>{profile.language}</Text>
+            <Text style={styles.infoValue}>{profile.language || 'Not set'}</Text>
           </View>
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>🌍 Ethnicity:</Text>
-            <Text style={styles.infoValue}>{profile.ethnicity}</Text>
+            <Text style={styles.infoValue}>{profile.ethnicity || 'Not set'}</Text>
           </View>
           {profile.gender && (
             <View style={styles.infoRow}>
@@ -188,31 +212,43 @@ export default function ProfileScreen() {
           )}
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>🎨 Hobbies:</Text>
-            <Text style={styles.infoValue}>{profile.hobbies}</Text>
+            <Text style={styles.infoValue}>
+                {Array.isArray(profile.hobbies) && profile.hobbies.length > 0 
+                    ? profile.hobbies.filter((h: string) => h && h.trim()).join(', ') || 'Not set'
+                    : typeof profile.hobbies === 'string' && profile.hobbies 
+                        ? profile.hobbies 
+                        : 'Not set'}
+            </Text>
           </View>
+          
+          {profile.favorite_teams && profile.favorite_teams.length > 0 && (
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>Teams</Text>
+              <View style={styles.teamsContainer}>
+                  {profile.favorite_teams.map((team: any, idx: number) => (
+                    <View key={idx} style={styles.teamBadge}>
+                      <Text style={styles.teamText}>{team.strTeam || team.name || team}</Text>
+                    </View>
+                  ))}
+              </View>
+            </View>
+          )}
+
+
         </View>
       )}
 
       {posts.length > 0 && (
-          <View style={styles.postsSection}>
-             <View style={styles.postsHeaderContainer}>
-                <Text style={styles.postsTitle}>Posts</Text>
-                <Text style={styles.postsCount}>{posts.length}</Text>
-             </View>
-             <View style={styles.postsGrid}>
-                {posts.map((post) => (
-                    <TouchableOpacity 
-                        key={post.id} 
-                        style={styles.postItem}
-                        onPress={() => setSelectedImage(post.images[0])}
-                    >
-                        <Image source={{ uri: post.images[0] }} style={styles.postImage} />
-                    </TouchableOpacity>
-                ))}
-             </View>
-          </View>
+         <View style={styles.postsHeaderContainer}>
+            <Text style={styles.postsTitle}>Posts</Text>
+            <Text style={styles.postsCount}>{posts.length}</Text>
+         </View>
       )}
+    </>
+  ), [profile, posts.length]);
 
+  const renderFooter = useCallback(() => (
+    <>
       {isCurrentUser ? (
         <View style={styles.settings}>
             <TouchableOpacity 
@@ -240,25 +276,66 @@ export default function ProfileScreen() {
              </TouchableOpacity>
          </View>
       )}
+    </>
+  ), [isCurrentUser, navigation, handleMessage]);
 
-      <Modal visible={!!selectedImage} transparent={true} onRequestClose={() => setSelectedImage(null)}>
-          <View style={styles.modalContainer}>
-              <TouchableOpacity style={styles.modalCloseButton} onPress={() => setSelectedImage(null)}>
-                  <Text style={styles.modalCloseText}>✕</Text>
-              </TouchableOpacity>
-              {selectedImage && (
-                <Image source={{ uri: selectedImage }} style={styles.modalImage} resizeMode="contain" />
-              )}
-          </View>
-      </Modal>
-    </ScrollView>
+  const renderPostItem = useCallback(({ item }: { item: any }) => (
+    <TouchableOpacity 
+        style={styles.postItem}
+        onPress={() => setSelectedImage(item.images[0])}
+    >
+        <Image source={{ uri: item.images[0] }} style={styles.postImage} />
+    </TouchableOpacity>
+  ), []);
+
+  return (
+    <View style={styles.container}>
+      {loading ? (
+        <View style={[styles.container, { justifyContent: 'center' }]}>
+            <ActivityIndicator size="large" color="#E94057" />
+        </View>
+      ) : !profile ? (
+        <View style={[styles.container, { justifyContent: 'center' }]}>
+            <Text style={{ fontSize: 18, color: '#666' }}>User not found</Text>
+            <TouchableOpacity onPress={() => navigation.goBack()} style={{ marginTop: 20 }}>
+                <Text style={{ color: '#E94057', fontSize: 16 }}>Go Back</Text>
+            </TouchableOpacity>
+        </View>
+      ) : (
+        <>
+          <FlatList
+            data={posts}
+            keyExtractor={(item) => item.id}
+            renderItem={renderPostItem}
+            numColumns={3}
+            ListHeaderComponent={renderHeader}
+            ListFooterComponent={renderFooter}
+            contentContainerStyle={styles.listContent}
+            showsVerticalScrollIndicator={false}
+          />
+
+          <Modal visible={!!selectedImage} transparent={true} onRequestClose={() => setSelectedImage(null)}>
+              <View style={styles.modalContainer}>
+                  <TouchableOpacity style={styles.modalCloseButton} onPress={() => setSelectedImage(null)}>
+                      <Text style={styles.modalCloseText}>✕</Text>
+                  </TouchableOpacity>
+                  {selectedImage && (
+                    <Image source={{ uri: selectedImage }} style={styles.modalImage} resizeMode="contain" />
+                  )}
+              </View>
+          </Modal>
+        </>
+      )}
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flexGrow: 1,
+    flex: 1,
     backgroundColor: '#fff',
+  },
+  listContent: {
     alignItems: 'center',
     paddingTop: 50,
     paddingBottom: 20,
@@ -299,6 +376,22 @@ const styles = StyleSheet.create({
     paddingHorizontal: 30,
     textAlign: 'center',
   },
+  voiceBioButton: {
+      flexDirection: 'row',
+      backgroundColor: '#E94057',
+      paddingVertical: 8,
+      paddingHorizontal: 15,
+      borderRadius: 20,
+      marginBottom: 20,
+      alignItems: 'center',
+      alignSelf: 'center',
+  },
+  voiceBioText: {
+      color: 'white',
+      marginLeft: 5,
+      fontWeight: 'bold',
+      fontSize: 14,
+  },
   personalityBadge: {
       backgroundColor: '#FFF0F3',
       paddingHorizontal: 15,
@@ -321,7 +414,7 @@ const styles = StyleSheet.create({
   section: {
       marginBottom: 15,
   },
-  sectionHeader: {
+  sectionTitle: {
       fontSize: 16,
       fontWeight: 'bold',
       marginBottom: 5,
@@ -331,6 +424,23 @@ const styles = StyleSheet.create({
       fontSize: 14,
       color: '#555',
       lineHeight: 20,
+  },
+  teamsContainer: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 5,
+    marginTop: 5,
+  },
+  teamBadge: {
+    backgroundColor: '#E94057',
+    borderRadius: 10,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  teamText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
   },
   divider: {
       height: 1,
@@ -373,6 +483,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     marginBottom: 10,
+    width: '100%',
   },
   postsTitle: {
     fontSize: 18,
@@ -383,11 +494,6 @@ const styles = StyleSheet.create({
   postsCount: {
     fontSize: 14,
     color: '#666',
-  },
-  postsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    width: '100%',
   },
   postItem: {
     width: ITEM_WIDTH,

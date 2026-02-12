@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
   TouchableOpacity,
   Alert,
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import ApiService from '../services/ApiService';
@@ -38,28 +39,61 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
   const [currentIndex, setCurrentIndex] = useState(0);
   const position = useRef(new Animated.ValueXY()).current;
   const [noMoreUsers, setNoMoreUsers] = useState(false);
+  const [page, setPage] = useState(1);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
 
   useEffect(() => {
     if (!currentUserId) {
         console.error('SwipeDeck: currentUserId is missing!');
         Alert.alert('Error', 'User ID missing. Please restart the app.');
-    } else {
-        console.log(`SwipeDeck mounted with User ID: ${currentUserId}`);
     }
-    loadUsers();
+    loadInitialUsers();
   }, [currentUserId]);
 
-  const loadUsers = async () => {
+  const loadInitialUsers = useCallback(async () => {
     try {
-      const fetchedUsers = await ApiService.getUsers(currentUserId);
-      // Filter out users that might already be matched (in a real app, backend handles this)
-      // For now, we shuffle or just show them
-      setUsers(fetchedUsers);
-      if (fetchedUsers.length === 0) setNoMoreUsers(true);
+      setPage(1);
+      setHasMore(true);
+      setNoMoreUsers(false);
+      const fetchedUsers = await ApiService.getUsers(currentUserId, 1, 10);
+      const filteredUsers = fetchedUsers.filter((u: any) => u.id !== currentUserId);
+      setUsers(filteredUsers);
+      if (filteredUsers.length === 0) setNoMoreUsers(true);
+      if (fetchedUsers.length < 10) setHasMore(false);
+      setPage(2);
     } catch (error) {
-      console.error('Error loading users for deck:', error);
+      // console.error('Error loading users for deck:', error);
     }
-  };
+  }, [currentUserId]);
+
+  const loadMoreUsers = useCallback(async () => {
+      if (loadingMore || !hasMore) return;
+      
+      setLoadingMore(true);
+      try {
+          const fetchedUsers = await ApiService.getUsers(currentUserId, page, 10);
+          
+          if (fetchedUsers.length > 0) {
+              const filteredUsers = fetchedUsers.filter((u: any) => u.id !== currentUserId);
+              // Filter out duplicates that might already exist in the list
+              const newUniqueUsers = filteredUsers.filter((u: any) => !users.some(existing => existing.id === u.id));
+              
+              if (newUniqueUsers.length > 0) {
+                  setUsers(prev => [...prev, ...newUniqueUsers]);
+                  setPage(prev => prev + 1);
+              }
+          }
+          
+          if (fetchedUsers.length < 10) {
+              setHasMore(false);
+          }
+      } catch (error) {
+          // console.error('Error loading more users:', error);
+      } finally {
+          setLoadingMore(false);
+      }
+  }, [currentUserId, loadingMore, hasMore, page, users]);
 
   const panResponder = useRef(
     PanResponder.create({
@@ -80,6 +114,7 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
   ).current;
 
   const forceSwipe = (direction: 'right' | 'left') => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
     const x = direction === 'right' ? width + 100 : -width - 100;
     Animated.timing(position, {
       toValue: { x, y: 0 },
@@ -96,6 +131,11 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
 
     const nextIndex = currentIndex + 1;
 
+    // Preload more users if we are running low (e.g., 3 cards left)
+    if (users.length - nextIndex < 3 && hasMore && !loadingMore) {
+        loadMoreUsers();
+    }
+
     if (direction === 'right') {
       await handleLike(item);
     }
@@ -103,7 +143,7 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
     position.setValue({ x: 0, y: 0 });
     setCurrentIndex(nextIndex);
     
-    if (nextIndex >= users.length) {
+    if (nextIndex >= users.length && !loadingMore && !hasMore) {
       setNoMoreUsers(true);
     }
   };
@@ -116,8 +156,8 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
     }).start();
   };
 
-  const handleLike = async (user: User) => {
-    console.log(`SwipeDeck: Swiped Right on ${user.name} (${user.id}). My ID: ${currentUserId}`);
+  const handleLike = useCallback(async (user: User) => {
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     
     if (!currentUserId) {
         Alert.alert('Error', 'Cannot like user: Your ID is missing.');
@@ -126,7 +166,6 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
 
     try {
       const response = await ApiService.likeUser(currentUserId, user.id);
-      console.log('SwipeDeck: Like Response:', response);
       
       if (response) {
           if (response.status === 'active') {
@@ -159,9 +198,9 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
           }
       }
     } catch (error) {
-      console.error('Error liking user:', error);
+      // console.error('Error liking user:', error);
     }
-  };
+  }, [currentUserId, navigation]);
 
   const getCardStyle = () => {
     const rotate = position.x.interpolate({
@@ -175,7 +214,7 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
     };
   };
 
-  const renderCard = (user: User, isFront: boolean) => {
+  const renderCard = useCallback((user: User, isFront: boolean) => {
     const isColor = user.image && user.image.startsWith('#');
     
     return (
@@ -227,16 +266,15 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
         )}
       </View>
     );
-  };
+  }, [position]);
 
   if (noMoreUsers) {
     return (
       <View style={styles.centerContainer}>
         <Text style={styles.noMoreText}>No more profiles to show.</Text>
         <TouchableOpacity style={styles.refreshButton} onPress={() => {
-            setNoMoreUsers(false);
             setCurrentIndex(0);
-            loadUsers();
+            loadInitialUsers();
         }}>
             <Text style={styles.refreshText}>Refresh</Text>
         </TouchableOpacity>

@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, FlatList, KeyboardAvoidingView, Platform, ActivityIndicator, SafeAreaView, Image, Linking, Alert } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useNavigation } from '@react-navigation/native';
+import * as Location from 'expo-location';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { fetchAIResponse } from '../services/AIService';
 
 interface PlanDetails {
@@ -30,6 +31,15 @@ interface Message {
 
 type ConversationStep = 'init' | 'date_planning_vibe' | 'restaurant_cuisine' | 'travel_type';
 
+const PUB_PREFIXES = ['The Old', 'The Royal', 'The Golden', 'The Rusty', 'The Happy', 'The Tipsy', 'The Black', 'The White', 'The Red'];
+const PUB_SUFFIXES = ['Tavern', 'Lion', 'Anchor', 'Barrel', 'Taphouse', 'Goat', 'Swan', 'Bear', 'Horse', 'Eagle'];
+
+const getRandomPubName = () => {
+    const prefix = PUB_PREFIXES[Math.floor(Math.random() * PUB_PREFIXES.length)];
+    const suffix = PUB_SUFFIXES[Math.floor(Math.random() * PUB_SUFFIXES.length)];
+    return `${prefix} ${suffix}`;
+};
+
 export default function AiAssistantScreen() {
   const [step, setStep] = useState<ConversationStep>('init');
   const [messages, setMessages] = useState<Message[]>([
@@ -46,22 +56,53 @@ export default function AiAssistantScreen() {
   const flatListRef = useRef<FlatList>(null);
   const navigation = useNavigation();
 
-  useEffect(() => {
-    loadLocation();
-  }, []);
+  useFocusEffect(
+    React.useCallback(() => {
+      loadLocation();
+    }, [])
+  );
 
-  const loadLocation = async () => {
+  const loadLocation = React.useCallback(async () => {
     try {
+      // 1. Try to get real-time location first
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status === 'granted') {
+        const location = await Location.getCurrentPositionAsync({});
+        const reverseGeocode = await Location.reverseGeocodeAsync({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude
+        });
+
+        if (reverseGeocode.length > 0) {
+            const address = reverseGeocode[0];
+            const city = address.city || address.subregion || address.region;
+            const country = address.country;
+            const locationString = city ? `${city}, ${country}` : country || 'Unknown Location';
+            
+            // console.log('AI Assistant: Refreshed real-time location:', locationString);
+            setUserLocation(locationString);
+            // Optionally update AsyncStorage too
+            await AsyncStorage.setItem('userLocation', locationString);
+            return;
+        }
+      }
+
+      // 2. Fallback to AsyncStorage
       const storedLocation = await AsyncStorage.getItem('userLocation');
       if (storedLocation) {
         setUserLocation(storedLocation);
       }
     } catch (error) {
-      console.error('Failed to load location', error);
+      // console.error('Failed to load location', error);
+      // Fallback to AsyncStorage if live fetch fails
+      const storedLocation = await AsyncStorage.getItem('userLocation');
+      if (storedLocation) {
+        setUserLocation(storedLocation);
+      }
     }
-  };
+  }, []);
 
-  const handleSavePlan = async (plan: PlanDetails) => {
+  const handleSavePlan = React.useCallback(async (plan: PlanDetails) => {
     try {
       const storedEvents = await AsyncStorage.getItem('scheduleEvents');
       const events = storedEvents ? JSON.parse(storedEvents) : [];
@@ -86,60 +127,9 @@ export default function AiAssistantScreen() {
     } catch (error) {
       Alert.alert('Error', 'Failed to save plan');
     }
-  };
+  }, [navigation]);
 
-  const handleSend = () => {
-    if (!inputText.trim()) return;
-
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      text: inputText,
-      sender: 'user',
-      timestamp: Date.now(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-    setInputText('');
-    setIsTyping(true);
-
-    // Call AI Service
-    generateAiResponse(userMessage.text);
-  };
-
-  const generateAiResponse = async (query: string) => {
-    try {
-        // Construct history from recent messages (last 30 to keep more context)
-        const history = messages.slice(-30).map(m => ({
-            role: m.sender === 'user' ? 'user' as const : 'assistant' as const,
-            content: m.text
-        }));
-
-        const aiData = await fetchAIResponse(query, userLocation, history);
-
-        if (aiData) {
-            // Use Real AI Data
-            const aiMessage: Message = {
-                id: (Date.now() + 1).toString(),
-                text: aiData.text,
-                sender: 'ai',
-                timestamp: Date.now(),
-                image: aiData.imageKeyword ? `https://source.unsplash.com/600x400/?${encodeURIComponent(aiData.imageKeyword)}` : undefined,
-                locations: aiData.locations || (aiData.locationQuery ? [{ name: aiData.locationName || 'View on Maps', query: aiData.locationQuery }] : undefined),
-                planDetails: aiData.planDetails
-            };
-            setMessages((prev) => [...prev, aiMessage]);
-            setIsTyping(false);
-            return;
-        }
-    } catch (error) {
-        console.error("AI Service failed, falling back to mock", error);
-    }
-
-    // Fallback to Mock Logic if API fails or returns null
-    generateMockResponse(query);
-  };
-
-  const generateMockResponse = (query: string) => {
+  const generateMockResponse = React.useCallback((query: string) => {
     let responseText = '';
     let image: string | undefined;
     let locations: { name: string; query: string }[] | undefined;
@@ -147,6 +137,9 @@ export default function AiAssistantScreen() {
 
     const lowerQuery = query.toLowerCase();
     const location = userLocation || "your area";
+    // Force location refresh from state just in case
+    // console.log("Generating response for location:", location);
+
     let nextStep = step;
     const today = new Date().toISOString().split('T')[0];
 
@@ -167,6 +160,21 @@ export default function AiAssistantScreen() {
                 } else if (lowerQuery.includes('travel') || lowerQuery.includes('trip')) {
                     nextStep = 'travel_type';
                     responseText = `Exciting! For a trip near ${location}, what's your style?\n\n• Nature 🌲\n• City Break 🏙️\n• Relaxing 🏖️`;
+                } else if (lowerQuery.includes('pub') || lowerQuery.includes('bar') || lowerQuery.includes('drink')) {
+                     nextStep = 'init'; // Reset after answer
+                     
+                     // Randomize mock data
+                     const pub1 = getRandomPubName();
+                     const pub2 = getRandomPubName();
+                     const pub3 = getRandomPubName();
+                     
+                     responseText = `🍻 **Pubs & Bars in ${location}**\n\nHere are some popular spots:\n\n1. **${pub1}**: Classic vibes and great ales.\n2. **${pub2}**: Cocktails with a view.\n3. **${pub3}**: Best local craft beers.`;
+                     image = 'https://images.unsplash.com/photo-1514933651103-005eec06c04b?w=500';
+                     locations = [
+                         { name: pub1, query: `${pub1} in ${location}` },
+                         { name: pub2, query: `${pub2} in ${location}` },
+                         { name: pub3, query: `${pub3} in ${location}` }
+                     ];
                 } else {
                     responseText = "I'm not sure I understood. Could you tell me if you want to:\n\n1. Plan a Date 📅\n2. Find a Restaurant 🍽️\n3. Plan a Trip ✈️";
                 }
@@ -290,9 +298,60 @@ export default function AiAssistantScreen() {
 
     setMessages((prev) => [...prev, aiMessage]);
     setIsTyping(false);
-  };
+  }, [step, userLocation]);
 
-  const renderMessage = ({ item }: { item: Message }) => (
+  const generateAiResponse = React.useCallback(async (query: string) => {
+    try {
+        // Construct history from recent messages (last 30 to keep more context)
+        const history = messages.slice(-30).map(m => ({
+            role: m.sender === 'user' ? 'user' as const : 'assistant' as const,
+            content: m.text
+        }));
+
+        const aiData = await fetchAIResponse(query, userLocation, history);
+
+        if (aiData) {
+            // Use Real AI Data
+            const aiMessage: Message = {
+                id: (Date.now() + 1).toString(),
+                text: aiData.text,
+                sender: 'ai',
+                timestamp: Date.now(),
+                image: aiData.imageKeyword ? `https://source.unsplash.com/600x400/?${encodeURIComponent(aiData.imageKeyword)}` : undefined,
+                locations: aiData.locations || (aiData.locationQuery ? [{ name: aiData.locationName || 'View on Maps', query: aiData.locationQuery }] : undefined),
+                planDetails: aiData.planDetails
+            };
+            setMessages((prev) => [...prev, aiMessage]);
+            setIsTyping(false);
+            return;
+        }
+    } catch (error) {
+        // console.error("AI Service failed, falling back to mock", error);
+    }
+
+    // Fallback to Mock Logic if API fails or returns null
+    generateMockResponse(query);
+  }, [messages, userLocation, generateMockResponse]);
+
+  const handleSend = React.useCallback(() => {
+    if (!inputText.trim()) return;
+
+    const userMessage: Message = {
+      id: Date.now().toString(),
+      text: inputText,
+      sender: 'user',
+      timestamp: Date.now(),
+    };
+
+    setMessages((prev) => [...prev, userMessage]);
+    setInputText('');
+    setIsTyping(true);
+
+    // Call AI Service
+    generateAiResponse(userMessage.text);
+  }, [inputText, generateAiResponse]);
+
+  const renderMessage = React.useCallback(({ item }: { item: Message }) => (
     <View style={[
       styles.messageBubble, 
       item.sender === 'user' ? styles.userBubble : styles.aiBubble
@@ -344,7 +403,7 @@ export default function AiAssistantScreen() {
         </TouchableOpacity>
       )}
     </View>
-  );
+  ), [handleSavePlan]);
 
   return (
     <SafeAreaView style={styles.safeArea}>

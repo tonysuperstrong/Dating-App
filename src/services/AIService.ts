@@ -46,13 +46,50 @@ export interface AIResponseData {
   };
 }
 
+export const generateIcebreaker = async (
+  otherUserName: string,
+  otherUserHobbies: string | string[],
+  userHobbies: string | string[]
+): Promise<string> => {
+  try {
+    const hobbiesStr = Array.isArray(otherUserHobbies) ? otherUserHobbies.join(', ') : otherUserHobbies;
+    const myHobbiesStr = Array.isArray(userHobbies) ? userHobbies.join(', ') : userHobbies;
+    
+    const prompt = `
+      Generate a fun, engaging, and short icebreaker message to start a conversation on a dating app.
+      Target User: ${otherUserName}
+      Target's Hobbies: ${hobbiesStr || 'Unknown'}
+      My Hobbies: ${myHobbiesStr || 'Unknown'}
+      
+      The message should be casual, friendly, and related to their hobbies if possible. 
+      Do not use hashtags. Keep it under 150 characters.
+      Just return the message text.
+    `;
+
+    const response = await fetch('https://text.pollinations.ai/openai', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openai',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.8,
+      }),
+    });
+
+    const data = await response.json();
+    return data.choices[0].message.content.trim().replace(/^"|"$/g, '');
+  } catch (error) {
+    console.error('Error generating icebreaker:', error);
+    return "Hi! I noticed we have some similar interests. How's your week going?";
+  }
+};
+
 export const fetchAIResponse = async (
   userMessage: string, 
   userLocation: string,
   history: { role: 'user' | 'assistant', content: string }[] = []
 ): Promise<AIResponseData | null> => {
   try {
-    console.log('Sending request to Pollinations AI...');
     const messages = [
       { role: 'system', content: SYSTEM_PROMPT + `\nUser Location: ${userLocation}\nToday's Date: ${new Date().toISOString().split('T')[0]}` },
       ...history,
@@ -73,7 +110,7 @@ export const fetchAIResponse = async (
     });
 
     const data = await response.json();
-    console.log('Pollinations Response Status:', response.status);
+    // console.log('Pollinations Response Status:', response.status);
     
     if (!response.ok) {
         console.error('Pollinations API Error Response:', JSON.stringify(data, null, 2));
@@ -88,7 +125,7 @@ export const fetchAIResponse = async (
         cleanContent = jsonMatch[1];
     }
 
-    console.log('Cleaned Content:', cleanContent);
+    // console.log('Cleaned Content:', cleanContent);
     
     try {
         const parsedContent: AIResponseData = JSON.parse(cleanContent);
@@ -107,14 +144,32 @@ export const fetchAIResponse = async (
   }
 };
 
-const POLISH_SYSTEM_PROMPT = `
-You are a helpful writing assistant. Your task is to polish the user's message to be more grammatically correct, natural, and charming for a dating context.
-Keep the same meaning, but make it sound better.
-Return ONLY the polished text. Do not include quotes or explanations.
+const FUNNY_SYSTEM_PROMPT = `
+You are a witty and charming dating coach. Your goal is to rewrite the user's message to be more engaging, funny, and charismatic.
+Guidelines:
+- Inject humor or playful teasing.
+- Make it sound natural and conversational.
+- Provide variety.
+- If the input is boring, spice it up!
+Return ONLY the polished text.
 `;
 
-export const polishMessage = async (text: string): Promise<string | null> => {
+const CHARMING_SYSTEM_PROMPT = `
+You are a helpful writing assistant. Your task is to polish the user's message to be more grammatically correct, natural, and charming for a dating context.
+Guidelines:
+- Keep the same meaning, but make it sound smoother and more confident.
+- Fix any grammar or spelling issues.
+- Be polite but not overly formal.
+Return ONLY the polished text.
+`;
+
+export const polishMessage = async (text: string, style: 'funny' | 'charming' = 'charming'): Promise<string | null> => {
   try {
+    const prompt = style === 'funny' ? FUNNY_SYSTEM_PROMPT : CHARMING_SYSTEM_PROMPT;
+    const userPrompt = style === 'funny' 
+        ? `Rewrite this message to be funny and humorous: "${text}"`
+        : `Rewrite this message to be charming and polished: "${text}"`;
+
     const response = await fetch('https://text.pollinations.ai/openai', {
       method: 'POST',
       headers: {
@@ -123,10 +178,10 @@ export const polishMessage = async (text: string): Promise<string | null> => {
       body: JSON.stringify({
         model: 'openai',
         messages: [
-          { role: 'system', content: POLISH_SYSTEM_PROMPT },
-          { role: 'user', content: text }
+          { role: 'system', content: prompt },
+          { role: 'user', content: userPrompt }
         ],
-        temperature: 0.7,
+        temperature: style === 'funny' ? 0.9 : 0.7,
       }),
     });
 

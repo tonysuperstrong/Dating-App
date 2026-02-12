@@ -19,7 +19,8 @@
       "bundleIdentifier": "com.datingapp.match",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to your location to show you potential matches nearby.",
-        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to let you upload profile pictures and create posts."
+        "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to let you upload profile pictures and create posts.",
+        "ITSAppUsesNonExemptEncryption": false
       }
     },
     "android": {
@@ -29,10 +30,11 @@
       },
       "package": "com.datingapp.match",
       "permissions": [
-        "ACCESS_COARSE_LOCATION",
-        "ACCESS_FINE_LOCATION",
-        "READ_EXTERNAL_STORAGE",
-        "WRITE_EXTERNAL_STORAGE"
+        "android.permission.ACCESS_COARSE_LOCATION",
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.RECORD_AUDIO"
       ]
     },
     "web": {
@@ -56,8 +58,9 @@
     ],
     "extra": {
       "eas": {
-        "projectId": "your-project-id-here"
+        "projectId": "66de7501-0334-4ba3-a489-93930d6caa36"
       }
-    }
+    },
+    "owner": "tonyleungdkkf"
   }
 }

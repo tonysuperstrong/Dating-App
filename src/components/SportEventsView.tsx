@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { 
   View, 
   Text, 
@@ -10,12 +10,17 @@ import {
   Alert, 
   ScrollView,
   RefreshControl,
-  Dimensions
+  Dimensions,
+  Platform
 } from 'react-native';
+import * as Haptics from 'expo-haptics';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect } from '@react-navigation/native';
+import MapView, { Marker, Region } from 'react-native-maps';
+import * as Location from 'expo-location';
 
 import { SportsService, Game } from '../services/SportsService';
+import ApiService from '../services/ApiService';
 
 const { width } = Dimensions.get('window');
 
@@ -25,7 +30,8 @@ interface SportEvent {
   hostId: string; // 'me' or other
   sport: string;
   matchup?: string; // e.g. "Arsenal vs Chelsea"
-  location: string; // Pub name
+  location: string; // Place Name
+  address: string; // Exact details (Street, City, Country)
   date: string;
   time: string;
   maxPeople: number;
@@ -73,9 +79,38 @@ const GamesCarousel = React.memo(({ games }: { games: Game[] }) => {
   );
 });
 
+const EventItem = React.memo(({ item, onJoin }: { item: SportEvent, onJoin: (id: string) => void }) => (
+    <View style={styles.card}>
+      <View style={styles.cardHeader}>
+        <View style={styles.sportBadge}>
+            <Text style={styles.sportText}>
+              {item.sport} {item.sport === 'Soccer' ? '⚽️' : item.sport === 'Basketball' ? '🏀' : '🎾'}
+            </Text>
+        </View>
+        <Text style={styles.teamText}>{item.matchup}</Text>
+      </View>
+      
+      <Text style={styles.locationText}>📍 {item.location}</Text>
+      {item.address && <Text style={styles.addressText}>{item.address}</Text>}
+      <Text style={styles.timeText}>🕒 {item.time} • 👥 {item.currentPeople}/{item.maxPeople} joined</Text>
+      
+      <Text style={styles.description}>{item.description}</Text>
+
+      <TouchableOpacity 
+        style={[styles.joinButton, item.joined ? styles.joinedButton : {}]}
+        onPress={() => onJoin(item.id)}
+      >
+        <Text style={[styles.joinButtonText, item.joined ? styles.joinedButtonText : {}]}>
+            {item.joined ? 'Joined ✅' : 'Accept Invitation'}
+        </Text>
+      </TouchableOpacity>
+    </View>
+));
+
 export default function SportEventsView() {
   const [events, setEvents] = useState<SportEvent[]>([]);
   const [userCountry, setUserCountry] = useState<string>('default');
+  const [userId, setUserId] = useState<string>('');
   const [refreshing, setRefreshing] = useState(false);
   
   // Clock State
@@ -90,7 +125,13 @@ export default function SportEventsView() {
   const [modalCategory, setModalCategory] = useState('Soccer');
   const [modalGames, setModalGames] = useState<Game[]>([]);
   const [selectedMatchup, setSelectedMatchup] = useState('');
-  const [selectedLocation, setSelectedLocation] = useState('');
+  
+  // Location State
+  const [placeName, setPlaceName] = useState('');
+  const [street, setStreet] = useState('');
+  const [city, setCity] = useState('');
+  const [country, setCountry] = useState('');
+
   const [time, setTime] = useState('');
   const [maxPeople, setMaxPeople] = useState('');
   const [description, setDescription] = useState('');
@@ -101,11 +142,79 @@ export default function SportEventsView() {
   const [pickerData, setPickerData] = useState<{label: string, value: string}[]>([]);
   const [pickerAction, setPickerAction] = useState<(value: string) => void>(() => {});
 
+  // Map State
+  const [mapRegion, setMapRegion] = useState<Region | null>(null);
+
+  // Initialize Map
+  useEffect(() => {
+    if (modalVisible) {
+      (async () => {
+        let { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert(
+            'Location Permission',
+            'Permission to access location was denied. The map will default to London.',
+            [{ text: 'OK' }]
+          );
+          // Default to London
+          setMapRegion({
+            latitude: 51.5074,
+            longitude: -0.1278,
+            latitudeDelta: 0.1,
+            longitudeDelta: 0.1,
+          });
+          return;
+        }
+
+        let location = await Location.getCurrentPositionAsync({});
+        setMapRegion({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+          latitudeDelta: 0.01,
+          longitudeDelta: 0.01,
+        });
+      })();
+    }
+  }, [modalVisible]);
+
+  const handleMapPress = async (e: any) => {
+    const { latitude, longitude } = e.nativeEvent.coordinate;
+    setMapRegion({
+        latitude,
+        longitude,
+        latitudeDelta: 0.01,
+        longitudeDelta: 0.01,
+    });
+    
+    // Reverse Geocode
+    try {
+        const address = await Location.reverseGeocodeAsync({ latitude, longitude });
+        if (address.length > 0) {
+            const addr = address[0];
+            setStreet(addr.street || addr.name || '');
+            setCity(addr.city || addr.subregion || '');
+            setCountry(addr.country || '');
+            if (addr.name && addr.name !== addr.street) {
+                setPlaceName(addr.name);
+            }
+        }
+    } catch (error) {
+        console.log('Reverse geocode failed', error);
+    }
+  };
+
   // Clock Effect
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
     return () => clearInterval(timer);
   }, []);
+
+  // Reload events when userId is set to ensure joined status is correct
+  useEffect(() => {
+    if (userId) {
+        loadEvents();
+    }
+  }, [userId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -163,6 +272,8 @@ export default function SportEventsView() {
       const profileString = await AsyncStorage.getItem('userProfile');
       if (profileString) {
         const profile = JSON.parse(profileString);
+        if (profile.id) setUserId(profile.id);
+
         if (profile.country && MOCK_PUBS[profile.country]) {
           setUserCountry(profile.country);
         } else {
@@ -176,42 +287,26 @@ export default function SportEventsView() {
 
   const loadEvents = async () => {
     try {
-      const storedEvents = await AsyncStorage.getItem('publicEvents');
-      if (storedEvents) {
-        setEvents(JSON.parse(storedEvents));
-      } else {
-        // Initialize with some mock events if empty
-        const initialEvents: SportEvent[] = [
-          {
-            id: '1',
-            hostId: 'other1',
-            sport: 'Soccer',
-            matchup: 'Real Madrid vs Barcelona',
-            location: 'The Irish Rover',
-            date: new Date().toISOString().split('T')[0],
-            time: '20:00',
-            maxPeople: 10,
-            currentPeople: 4,
-            description: 'El Clásico viewing party! Come join us for beers and tapas.',
-            joined: false
-          },
-          {
-            id: '2',
-            hostId: 'other2',
-            sport: 'Soccer',
-            matchup: 'Man Utd vs Liverpool',
-            location: 'The Red Lion',
-            date: new Date().toISOString().split('T')[0],
-            time: '15:00',
-            maxPeople: 5,
-            currentPeople: 2,
-            description: 'Watching the derby. United fans only! 😈',
-            joined: false
-          }
-        ];
-        setEvents(initialEvents);
-        await AsyncStorage.setItem('publicEvents', JSON.stringify(initialEvents));
+      const apiEvents = await ApiService.getSportEvents(userId);
+      if (!Array.isArray(apiEvents)) {
+        console.error('loadEvents: apiEvents is not an array', apiEvents);
+        return;
       }
+      const mappedEvents = apiEvents.map((e: any) => ({
+        id: e.id,
+        hostId: e.host_id,
+        sport: e.sport,
+        matchup: e.matchup,
+        location: e.location,
+        address: e.address,
+        date: e.date,
+        time: e.time,
+        maxPeople: e.max_people,
+        currentPeople: e.currentPeople,
+        description: e.description,
+        joined: e.joined
+      }));
+      setEvents(mappedEvents);
     } catch (error) {
       console.error('Error loading events', error);
     }
@@ -225,64 +320,74 @@ export default function SportEventsView() {
   }, []);
 
   const handleCreateEvent = async () => {
-    if (!selectedMatchup || !selectedLocation || !time || !maxPeople || !description) {
+    if (!selectedMatchup || !placeName || !street || !city || !country || !time || !maxPeople || !description) {
       Alert.alert('Missing Info', 'Please fill in all fields.');
       return;
     }
 
-    const newEvent: SportEvent = {
-      id: Date.now().toString(),
-      hostId: 'me',
+    const addressString = `${street}, ${city}, ${country}`;
+
+    const eventData = {
+      host_id: userId,
       sport: modalCategory,
       matchup: selectedMatchup,
-      location: selectedLocation,
-      date: new Date().toISOString().split('T')[0], // Default to today for simplicity
+      location: placeName,
+      address: addressString,
+      date: new Date().toISOString().split('T')[0],
       time: time,
-      maxPeople: parseInt(maxPeople) || 10,
-      currentPeople: 1,
-      description: description,
-      joined: true
+      max_people: parseInt(maxPeople) || 10,
+      description: description
     };
 
-    const updatedEvents = [newEvent, ...events];
-    setEvents(updatedEvents);
-    await AsyncStorage.setItem('publicEvents', JSON.stringify(updatedEvents));
-    
-    setModalVisible(false);
-    resetForm();
-    Alert.alert('Success', 'Event created successfully!');
+    try {
+      await ApiService.createSportEvent(eventData);
+      await loadEvents();
+      setModalVisible(false);
+      resetForm();
+      Alert.alert('Success', 'Event created successfully!');
+    } catch (error) {
+      Alert.alert('Error', 'Failed to create event');
+    }
   };
 
   const resetForm = () => {
     setSelectedMatchup('');
-    setSelectedLocation('');
+    setPlaceName('');
+    setStreet('');
+    setCity('');
+    setCountry('');
     setTime('');
     setMaxPeople('');
     setDescription('');
   };
 
   const handleJoinEvent = async (eventId: string) => {
-    const updatedEvents = events.map(event => {
-      if (event.id === eventId) {
-        if (event.joined) {
-            // Leave
-            removeFromSchedule(event);
-            return { ...event, joined: false, currentPeople: event.currentPeople - 1 };
-        } else {
-            // Join
-            if (event.currentPeople >= event.maxPeople) {
-                Alert.alert('Full', 'This event is already full!');
-                return event;
-            }
-            addToSchedule(event);
-            return { ...event, joined: true, currentPeople: event.currentPeople + 1 };
-        }
-      }
-      return event;
-    });
+    const event = events.find(e => e.id === eventId);
+    if (!event) return;
 
-    setEvents(updatedEvents);
-    await AsyncStorage.setItem('publicEvents', JSON.stringify(updatedEvents));
+    try {
+      if (event.joined) {
+        // Leave
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+        await ApiService.leaveSportEvent(eventId, userId);
+        removeFromSchedule(event);
+      } else {
+        // Join
+        if (event.currentPeople >= event.maxPeople) {
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+            Alert.alert('Full', 'This event is already full!');
+            return;
+        }
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        await ApiService.joinSportEvent(eventId, userId);
+        addToSchedule(event);
+      }
+      // Refresh to get updated count and status
+      await loadEvents();
+    } catch (error) {
+      console.error('Error joining/leaving event', error);
+      Alert.alert('Error', 'Failed to update event status');
+    }
   };
 
   const addToSchedule = async (event: SportEvent) => {
@@ -347,40 +452,17 @@ export default function SportEventsView() {
     }));
     setPickerTitle('Select Location');
     setPickerData(data);
-    setPickerAction(() => (val: string) => setSelectedLocation(val));
+    setPickerAction(() => (val: string) => setStreet(val));
     setPickerVisible(true);
   };
 
-  const getFilteredEvents = () => {
+  const getFilteredEvents = useMemo(() => {
     return events.filter(event => event.sport === selectedCategory);
-  };
+  }, [events, selectedCategory]);
 
-  const renderEventItem = ({ item }: { item: SportEvent }) => (
-    <View style={styles.card}>
-      <View style={styles.cardHeader}>
-        <View style={styles.sportBadge}>
-            <Text style={styles.sportText}>
-              {item.sport} {item.sport === 'Soccer' ? '⚽️' : item.sport === 'Basketball' ? '🏀' : '🎾'}
-            </Text>
-        </View>
-        <Text style={styles.teamText}>{item.matchup}</Text>
-      </View>
-      
-      <Text style={styles.locationText}>📍 {item.location}</Text>
-      <Text style={styles.timeText}>🕒 {item.time} • 👥 {item.currentPeople}/{item.maxPeople} joined</Text>
-      
-      <Text style={styles.description}>{item.description}</Text>
-
-      <TouchableOpacity 
-        style={[styles.joinButton, item.joined ? styles.joinedButton : {}]}
-        onPress={() => handleJoinEvent(item.id)}
-      >
-        <Text style={[styles.joinButtonText, item.joined ? styles.joinedButtonText : {}]}>
-            {item.joined ? 'Joined ✅' : 'Accept Invitation'}
-        </Text>
-      </TouchableOpacity>
-    </View>
-  );
+  const renderEventItem = useCallback(({ item }: { item: SportEvent }) => (
+    <EventItem item={item} onJoin={handleJoinEvent} />
+  ), [handleJoinEvent]);
 
   const categories = ['Soccer', 'Basketball', 'Tennis'];
 
@@ -412,7 +494,7 @@ export default function SportEventsView() {
       </View>
 
       <FlatList
-        data={getFilteredEvents()}
+        data={getFilteredEvents}
         renderItem={renderEventItem}
         keyExtractor={item => item.id}
         contentContainerStyle={styles.listContent}
@@ -436,7 +518,10 @@ export default function SportEventsView() {
         <View style={styles.modalContainer}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Create Event</Text>
-            <TouchableOpacity onPress={() => setModalVisible(false)}>
+            <TouchableOpacity onPress={() => {
+                resetForm();
+                setModalVisible(false);
+            }}>
               <Text style={styles.closeText}>Cancel</Text>
             </TouchableOpacity>
           </View>
@@ -476,15 +561,49 @@ export default function SportEventsView() {
                 <Text style={styles.inputText}>{selectedMatchup || 'Select a match...'}</Text>
             </TouchableOpacity>
             
-            {/* Pub Selection */}
-            <Text style={styles.label}>Location (Pubs in {userCountry === 'default' ? 'your area' : userCountry})</Text>
-            <TouchableOpacity 
-                style={styles.dropdownButton}
-                onPress={openLocationPicker}
-            >
-                <Text style={styles.inputText}>{selectedLocation || 'Select a pub...'}</Text>
-            </TouchableOpacity>
-
+            {/* Location with Map */}
+            <Text style={styles.label}>Location</Text>
+            {mapRegion && (
+                <View style={styles.mapContainer}>
+                    <MapView
+                        style={styles.map}
+                        region={mapRegion}
+                        onPress={handleMapPress}
+                    >
+                        <Marker coordinate={mapRegion} />
+                    </MapView>
+                    <View style={styles.mapHintContainer}>
+                        <Text style={styles.mapHint}>Tap to select location</Text>
+                    </View>
+                </View>
+            )}
+            <View style={{ zIndex: 10 }}>
+                <TextInput
+                    style={[styles.input, { marginBottom: 10 }]}
+                    value={placeName}
+                    onChangeText={setPlaceName}
+                    placeholder="Place Name (e.g. The Red Lion)"
+                />
+                <TextInput
+                    style={[styles.input, { marginBottom: 10 }]}
+                    value={street}
+                    onChangeText={setStreet}
+                    placeholder="Street / Address"
+                />
+                <TextInput
+                    style={[styles.input, { marginBottom: 10 }]}
+                    value={city}
+                    onChangeText={setCity}
+                    placeholder="City"
+                />
+                <TextInput
+                    style={styles.input}
+                    value={country}
+                    onChangeText={setCountry}
+                    placeholder="Country"
+                />
+            </View>
+            
             {/* Time */}
             <Text style={styles.label}>Time (e.g. 19:00)</Text>
             <TextInput
@@ -521,44 +640,40 @@ export default function SportEventsView() {
             </TouchableOpacity>
 
           </ScrollView>
+
+          {pickerVisible && (
+            <View style={styles.pickerOverlay}>
+                <View style={styles.pickerContent}>
+                    <View style={styles.pickerHeader}>
+                        <Text style={styles.pickerTitle}>{pickerTitle}</Text>
+                        <TouchableOpacity onPress={() => setPickerVisible(false)}>
+                            <Text style={styles.closeText}>Close</Text>
+                        </TouchableOpacity>
+                    </View>
+                    <FlatList
+                        style={{ flex: 1 }}
+                        contentContainerStyle={{ paddingBottom: 20 }}
+                        data={pickerData}
+                        keyExtractor={(item) => item.value}
+                        renderItem={({item}) => (
+                            <TouchableOpacity 
+                                style={styles.pickerItem} 
+                                onPress={() => {
+                                    pickerAction(item.value);
+                                    setPickerVisible(false);
+                                }}
+                            >
+                                <Text style={styles.pickerItemText}>{item.label}</Text>
+                            </TouchableOpacity>
+                        )}
+                    />
+                </View>
+            </View>
+          )}
         </View>
       </Modal>
 
-      {/* Picker Modal */}
-      <Modal
-        visible={pickerVisible}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setPickerVisible(false)}
-      >
-        <View style={styles.pickerModalContainer}>
-            <View style={styles.pickerContent}>
-                <View style={styles.pickerHeader}>
-                    <Text style={styles.pickerTitle}>{pickerTitle}</Text>
-                    <TouchableOpacity onPress={() => setPickerVisible(false)}>
-                        <Text style={styles.closeText}>Close</Text>
-                    </TouchableOpacity>
-                </View>
-                <FlatList
-                    style={{ flex: 1 }}
-                    contentContainerStyle={{ paddingBottom: 20 }}
-                    data={pickerData}
-                    keyExtractor={(item) => item.value}
-                    renderItem={({item}) => (
-                        <TouchableOpacity 
-                            style={styles.pickerItem} 
-                            onPress={() => {
-                                pickerAction(item.value);
-                                setPickerVisible(false);
-                            }}
-                        >
-                            <Text style={styles.pickerItemText}>{item.label}</Text>
-                        </TouchableOpacity>
-                    )}
-                />
-            </View>
-        </View>
-      </Modal>
+
     </View>
   );
 }
@@ -578,6 +693,31 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
+  },
+  mapContainer: {
+    height: 200,
+    borderRadius: 10,
+    overflow: 'hidden',
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#ddd',
+  },
+  map: {
+    width: '100%',
+    height: '100%',
+  },
+  mapHintContainer: {
+    position: 'absolute',
+    bottom: 10,
+    left: 10,
+    backgroundColor: 'rgba(0,0,0,0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 15,
+  },
+  mapHint: {
+    color: 'white',
+    fontSize: 12,
   },
   headerLeft: {
     justifyContent: 'center',
@@ -601,7 +741,7 @@ const styles = StyleSheet.create({
   },
   createButtonText: {
     color: '#fff',
-    fontWeight: 'bold',
+    fontWeight: '600',
   },
   categoryContainer: {
     flexDirection: 'row',
@@ -672,6 +812,12 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: '#555',
     marginBottom: 5,
+  },
+  addressText: {
+    fontSize: 12,
+    color: '#999',
+    marginTop: 2,
+    marginLeft: 18, // Align with text after emoji
   },
   timeText: {
     fontSize: 14,
@@ -882,10 +1028,16 @@ const styles = StyleSheet.create({
   },
   
   // Picker Modal Styles
-  pickerModalContainer: {
+  pickerOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
     justifyContent: 'flex-end',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    zIndex: 1000,
   },
   pickerContent: {
     backgroundColor: '#fff',

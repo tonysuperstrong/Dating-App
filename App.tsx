@@ -10,6 +10,7 @@ import ProfileScreen from './src/screens/ProfileScreen';
 import ProfileSetupScreen from './src/screens/ProfileSetupScreen';
 import AiAssistantScreen from './src/screens/AiAssistantScreen';
 import ScheduleScreen from './src/screens/ScheduleScreen';
+import MapScreen from './src/screens/MapScreen';
 import { StatusBar } from 'expo-status-bar';
 
 const Stack = createStackNavigator();
@@ -33,7 +34,7 @@ export default function App() {
             headerShown: true,
             headerTitle: route.params?.isEditing ? 'Edit Profile' : 'Setup Profile',
             headerTintColor: '#E94057',
-            headerLeft: route.params?.isEditing ? undefined : () => null,
+            // headerLeft: route.params?.isEditing ? undefined : () => null, // Allow back button for all
           })}
         />
         <Stack.Screen name="Home" component={HomeScreen} />
@@ -68,11 +69,12 @@ export default function App() {
         <Stack.Screen 
           name="Schedule" 
           component={ScheduleScreen} 
-          options={{ 
-            headerShown: true,
-            headerTitle: 'My Schedule',
-            headerTintColor: '#E94057',
-          }} 
+          options={{ headerShown: false }} 
+        />
+        <Stack.Screen 
+          name="Map" 
+          component={MapScreen} 
+          options={{ headerShown: false }} 
         />
       </Stack.Navigator>
     </NavigationContainer>
