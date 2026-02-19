@@ -73,7 +73,9 @@ class ApiService {
     try {
       const response = await this.fetchWithTimeout(`${BASE_URL}/users/${id}`);
       if (!response.ok) throw new Error('User not found');
-      return await response.json();
+      const data = await response.json();
+      console.log('ApiService.getUserById response:', JSON.stringify(data, null, 2));
+      return data;
     } catch (error) {
       this.handleError('getUserById', error);
       return null;

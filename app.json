@@ -1,32 +1,36 @@
 {
   "expo": {
-    "name": "DatingMatchApp",
+    "name": "RSSA",
     "slug": "dating-match-app",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
+    "icon": "./assets/love.png",
     "userInterfaceStyle": "light",
     "splash": {
-      "image": "./assets/icon.png",
+      "image": "./assets/love.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
-    "assetBundlePatterns": [
-      "**/*"
-    ],
+    "assetBundlePatterns": ["**/*"],
     "newArchEnabled": false,
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.datingapp.match",
+      "buildNumber": "3",
+      "icon": "./assets/love.png",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "This app needs access to your location to show you potential matches nearby.",
         "NSPhotoLibraryUsageDescription": "This app needs access to your photo library to let you upload profile pictures and create posts.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": true
+        }
       }
     },
     "android": {
+      "icon": "./assets/love.png",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/icon.png",
+        "foregroundImage": "./assets/love.png",
         "backgroundColor": "#ffffff"
       },
       "package": "com.datingapp.match",
@@ -39,7 +43,7 @@
       ]
     },
     "web": {
-      "favicon": "./assets/favicon.png"
+      "favicon": "./assets/love.png"
     },
     "plugins": [
       "expo-asset",

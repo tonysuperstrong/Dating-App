@@ -8,6 +8,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useNavigation, useRoute } from '@react-navigation/native';
 import ApiService from '../services/ApiService';
+import * as ImagePicker from 'expo-image-picker';
 
 const { width } = Dimensions.get('window');
 const ITEM_WIDTH = width / 3;
@@ -55,20 +56,17 @@ export default function ProfileScreen() {
 
           if (targetUserId) {
             // Always fetch if userId is provided to ensure fresh data and handle guest mode
-            console.log('[ProfileScreen] Fetching profile for:', targetUserId);
             const user = await ApiService.getUserById(targetUserId);
+            console.log('ProfileScreen loaded user:', JSON.stringify(user, null, 2));
             
             if (user) {
-                console.log('[ProfileScreen] Fetched user:', user.username);
                 setProfile(user);
                 activeProfileId = user.id;
                 // Check if the fetched user is the current user
                 setIsCurrentUser(storedProfile && String(storedProfile.id) === String(user.id));
             } else {
-                console.log('[ProfileScreen] Failed to fetch user, trying fallback');
                 // Fallback: if failed to fetch and it's us, use stored
                 if (storedProfile && String(targetUserId) === String(storedProfile.id)) {
-                    console.log('[ProfileScreen] Using stored profile fallback');
                     setProfile(storedProfile);
                     activeProfileId = storedProfile.id;
                     setIsCurrentUser(true);
@@ -140,7 +138,10 @@ export default function ProfileScreen() {
       }
   };
 
-  const renderHeader = useCallback(() => (
+ const renderHeader = useCallback(() => {
+    console.log('Rendering Profile Header. Profile:', JSON.stringify(profile, null, 2));
+    
+    return (
     <>
       <View style={styles.avatarContainer}>
         {profile?.image && !profile.image.startsWith('#') ? (
@@ -153,8 +154,8 @@ export default function ProfileScreen() {
       </View>
       
       <Text style={styles.name}>{profile?.username ? `@${profile.username}` : 'Profile'}</Text>
-      <Text style={styles.bio}>{profile?.bio || 'No bio available.'}</Text>
-
+      <Text style={styles.bio}>{(profile?.bio && profile.bio.trim()) || 'No bio available.'}</Text>
+      
       {profile?.voice_bio && (
           <TouchableOpacity style={styles.voiceBioButton} onPress={playVoiceBio}>
               <Ionicons name="mic" size={20} color="white" />
@@ -164,7 +165,9 @@ export default function ProfileScreen() {
 
       {profile?.personality_type && (
           <View style={styles.personalityBadge}>
-              <Text style={styles.personalityText}>✨ {profile.personality_type}</Text>
+              <Text style={styles.personalityText}>
+                  Personality: {profile.personality_type}
+              </Text>
           </View>
       )}
 
@@ -192,32 +195,57 @@ export default function ProfileScreen() {
               <Text style={styles.infoValue}>{profile.age.toString()}</Text>
             </View>
           )}
+
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>📍 Country:</Text>
-            <Text style={styles.infoValue}>{profile.location || 'Not set'}</Text>
+            <Text style={styles.infoValue}>
+                {(profile.location && profile.location.trim()) ? profile.location : 'Not set'}
+            </Text>
           </View>
+
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>🗣 Language:</Text>
-            <Text style={styles.infoValue}>{profile.language || 'Not set'}</Text>
+            <Text style={styles.infoValue}>
+                {(() => {
+                    const l = profile.language;
+                    console.log('Rendering Language:', l);
+                    return (l && l.trim()) ? l : 'Not set';
+                })()}
+            </Text>
           </View>
+
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>🌍 Ethnicity:</Text>
-            <Text style={styles.infoValue}>{profile.ethnicity || 'Not set'}</Text>
+            <Text style={styles.infoValue}>
+                {(() => {
+                    const e = profile.ethnicity;
+                    console.log('Rendering Ethnicity:', e);
+                    return (e && e.trim()) ? e : 'Not set';
+                })()}
+            </Text>
           </View>
+
           {profile.gender && (
             <View style={styles.infoRow}>
               <Text style={styles.infoLabel}>⚧ Gender:</Text>
               <Text style={styles.infoValue}>{profile.gender}</Text>
             </View>
           )}
+
           <View style={styles.infoRow}>
             <Text style={styles.infoLabel}>🎨 Hobbies:</Text>
             <Text style={styles.infoValue}>
-                {Array.isArray(profile.hobbies) && profile.hobbies.length > 0 
-                    ? profile.hobbies.filter((h: string) => h && h.trim()).join(', ') || 'Not set'
-                    : typeof profile.hobbies === 'string' && profile.hobbies 
-                        ? profile.hobbies 
-                        : 'Not set'}
+                {(() => {
+                    const h = profile.hobbies;
+                    console.log('Rendering Hobbies:', h, 'Type:', typeof h, 'IsArray:', Array.isArray(h));
+                    if (Array.isArray(h) && h.length > 0) {
+                        return h.filter((item: string) => item && item.trim()).join(', ') || 'Not set';
+                    }
+                    if (typeof h === 'string' && h.trim()) {
+                        return h.trim();
+                    }
+                    return 'Not set';
+                })()}
             </Text>
           </View>
           
@@ -233,8 +261,6 @@ export default function ProfileScreen() {
               </View>
             </View>
           )}
-
-
         </View>
       )}
 
@@ -245,7 +271,8 @@ export default function ProfileScreen() {
          </View>
       )}
     </>
-  ), [profile, posts.length]);
+    );
+  }, [profile, posts.length]);
 
   const renderFooter = useCallback(() => (
     <>
@@ -259,7 +286,8 @@ export default function ProfileScreen() {
             </TouchableOpacity>
             <TouchableOpacity 
             style={styles.settingItem}
-            onPress={() => {
+            onPress={async () => {
+                await AsyncStorage.removeItem('userProfile');
                 navigation.replace('Login');
             }}
             >
@@ -308,7 +336,7 @@ export default function ProfileScreen() {
             keyExtractor={(item) => item.id}
             renderItem={renderPostItem}
             numColumns={3}
-            ListHeaderComponent={renderHeader}
+            ListHeaderComponent={renderHeader()}
             ListFooterComponent={renderFooter}
             contentContainerStyle={styles.listContent}
             showsVerticalScrollIndicator={false}

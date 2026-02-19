@@ -18,10 +18,14 @@ const io = new Server(server, {
   }
 });
 
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(bodyParser.json());
+
+app.get('/', (req, res) => {
+  res.send('OK');
+});
 
 // Socket.io Logic
 io.on('connection', (socket) => {
@@ -994,6 +998,5 @@ app.post('/sport-events/:id/leave', async (req, res) => {
 
 // Start Server
 server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`To connect from emulator/device, use your machine's IP address instead of localhost`);
+    console.log(`Server running on port ${PORT}`);
 });

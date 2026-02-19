@@ -297,18 +297,18 @@ export default function ProfileSetupScreen() {
     
     try {
       const userProfile = {
-        username,
-        password,
-        name: username, // Use username as name for now
+        username: username.trim(),
+        password: password.trim(),
+        name: username.trim(), // Use username as name for now
         age: parseInt(age, 10),
-        bio,
+        bio: bio.trim(),
         image,
         type: 'date', // Default type
-        location: country,
+        location: country.trim(),
         hobbies: hobbies.split(',').map(h => h.trim()).filter(h => h), // Convert string to array and filter empty
-        language,
-        ethnicity,
-        gender,
+        language: language.trim(),
+        ethnicity: ethnicity.trim(),
+        gender: gender.trim(),
         phone_number: phoneInput ? (countryCode + phoneInput) : '',
         voice_bio: voiceBioUri,
       };
