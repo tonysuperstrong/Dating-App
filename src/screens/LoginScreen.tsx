@@ -1,14 +1,10 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, TextInput } from 'react-native';
+import { View, Text, StyleSheet, TouchableOpacity, Alert, TextInput, Platform } from 'react-native';
 import { useNavigation } from '@react-navigation/native';
 import { StackNavigationProp } from '@react-navigation/stack';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as WebBrowser from 'expo-web-browser';
-import * as Google from 'expo-auth-session/providers/google';
-import * as Facebook from 'expo-auth-session/providers/facebook';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import ApiService from '../services/ApiService';
-
-WebBrowser.maybeCompleteAuthSession();
 
 type RootStackParamList = {
   Home: undefined;
@@ -21,6 +17,15 @@ export default function LoginScreen() {
   const navigation = useNavigation<LoginScreenNavigationProp>();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [isAppleAvailable, setIsAppleAvailable] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS === 'ios') {
+      AppleAuthentication.isAvailableAsync()
+        .then(setIsAppleAvailable)
+        .catch(() => setIsAppleAvailable(false));
+    }
+  }, []);
 
   const handleCredentialsLogin = useCallback(async () => {
     if (!username || !password) {
@@ -44,117 +49,30 @@ export default function LoginScreen() {
     }
   }, [username, password, navigation]);
 
-  // --- Google Sign-In Setup ---
-  // You need to generate these Client IDs in the Google Cloud Console:
-  // https://console.cloud.google.com/
-  const [googleRequest, googleResponse, promptGoogleAsync] = Google.useAuthRequest({
-    expoClientId: 'YOUR_EXPO_CLIENT_ID', 
-    iosClientId: 'YOUR_IOS_CLIENT_ID', 
-    androidClientId: 'YOUR_ANDROID_CLIENT_ID', 
-    webClientId: 'YOUR_WEB_CLIENT_ID', 
-  } as any);
+  const handleAppleLogin = useCallback(async () => {
+    try {
+      const credential = await AppleAuthentication.signInAsync({
+        requestedScopes: [
+          AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+          AppleAuthentication.AppleAuthenticationScope.EMAIL,
+        ],
+      });
 
-  // --- Facebook Login Setup ---
-  // You need to create an App in the Meta for Developers console:
-  // https://developers.facebook.com/
-  const [facebookRequest, facebookResponse, promptFacebookAsync] = Facebook.useAuthRequest({
-    clientId: 'YOUR_FACEBOOK_APP_ID', // Replace with your Facebook App ID
-  });
+      const user = await ApiService.loginWithApple(
+        credential.user,
+        credential.email || undefined,
+        credential.fullName?.givenName || undefined
+      );
 
-  useEffect(() => {
-    // Handle Google Response
-    if (googleResponse?.type === 'success') {
-      const { authentication } = googleResponse;
-      // console.log('Google Login Success:', authentication);
-      // In a real app, send authentication.accessToken to your backend
-      navigation.navigate('ProfileSetup');
+      await AsyncStorage.setItem('userProfile', JSON.stringify(user));
+      navigation.replace('Home');
+    } catch (e: any) {
+      if (e?.code === 'ERR_CANCELED') {
+        return;
+      }
+      Alert.alert('Login Error', 'Failed to sign in with Apple');
     }
-
-    // Handle Facebook Response
-    if (facebookResponse?.type === 'success') {
-      const { authentication } = facebookResponse;
-      // console.log('Facebook Login Success:', authentication);
-      // In a real app, send authentication.accessToken to your backend
-      navigation.navigate('ProfileSetup');
-    }
-  }, [googleResponse, facebookResponse]);
-
-  const handleLogin = useCallback(async (provider: string) => {
-    if (provider === 'Google') {
-      // Check if we are using placeholder IDs
-      if (!googleRequest || googleRequest?.clientId === 'YOUR_EXPO_CLIENT_ID' || googleRequest?.clientId === 'YOUR_IOS_CLIENT_ID') {
-         // Mock successful login for demo purposes
-         const mockUser = {
-            id: 'mock-google-user',
-            username: 'Google User',
-            image: 'https://via.placeholder.com/150',
-            bio: 'This is a demo account logged in via Google.',
-            hobbies: 'Coding, Testing',
-            country: 'Internet',
-            language: 'English',
-            ethnicity: 'AI',
-            gender: 'Non-binary',
-            age: '25'
-         };
-         
-         Alert.alert(
-           'Demo Mode', 
-           'Google Client IDs are not configured. Simulating successful login...',
-           [{ 
-             text: 'OK', 
-             onPress: async () => {
-               await AsyncStorage.setItem('userProfile', JSON.stringify(mockUser));
-               navigation.replace('Home');
-             } 
-           }]
-         );
-         return;
-      }
-      try {
-        await promptGoogleAsync();
-      } catch (e) {
-        Alert.alert('Login Error', 'Failed to start Google Sign-In');
-      }
-    } else if (provider === 'Facebook') {
-       if (!facebookRequest || facebookRequest?.clientId === 'YOUR_FACEBOOK_APP_ID') {
-         // Mock successful login for demo purposes
-         const mockUser = {
-            id: 'mock-facebook-user',
-            username: 'Facebook User',
-            image: 'https://via.placeholder.com/150',
-            bio: 'This is a demo account logged in via Facebook.',
-            hobbies: 'Social Media, Sharing',
-            country: 'Internet',
-            language: 'English',
-            ethnicity: 'AI',
-            gender: 'Non-binary',
-            age: '25'
-         };
-
-         Alert.alert(
-           'Demo Mode', 
-           'Facebook App ID is not configured. Simulating successful login...',
-           [{ 
-             text: 'OK', 
-             onPress: async () => {
-               await AsyncStorage.setItem('userProfile', JSON.stringify(mockUser));
-               navigation.replace('Home');
-             } 
-           }]
-         );
-         return;
-      }
-      try {
-        await promptFacebookAsync();
-      } catch (e) {
-        Alert.alert('Login Error', 'Failed to start Facebook Login');
-      }
-    } else if (provider === 'Instagram') {
-      // Instagram Login is more complex and typically requires a custom webview flow or 'react-native-instagram-login'
-      // which is often deprecated. For Expo Go, the best way is often via a generic OAuth flow or just linking manually.
-      Alert.alert('Instagram Login', 'Instagram Login requires complex setup with the Instagram Basic Display API. Please use Google/Facebook for this demo.');
-    }
-  }, [googleRequest, facebookRequest, promptGoogleAsync, promptFacebookAsync, navigation]);
+  }, [navigation]);
 
   return (
     <View style={styles.container}>
@@ -185,32 +103,15 @@ export default function LoginScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.divider}>
-        <View style={styles.dividerLine} />
-        <Text style={styles.dividerText}>OR</Text>
-        <View style={styles.dividerLine} />
-      </View>
-
-      <TouchableOpacity 
-        style={[styles.button, styles.googleButton]}
-        onPress={() => handleLogin('Google')}
-      >
-        <Text style={[styles.buttonText, styles.googleText]}>Sign in with Google</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity 
-        style={[styles.button, styles.facebookButton]}
-        onPress={() => handleLogin('Facebook')}
-      >
-        <Text style={styles.buttonText}>Sign in with Facebook</Text>
-      </TouchableOpacity>
-
-      <TouchableOpacity 
-        style={[styles.button, styles.instagramButton]}
-        onPress={() => handleLogin('Instagram')}
-      >
-        <Text style={styles.buttonText}>Sign in with Instagram</Text>
-      </TouchableOpacity>
+      {isAppleAvailable && (
+        <AppleAuthentication.AppleAuthenticationButton
+          buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+          buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+          cornerRadius={30}
+          style={styles.appleButton}
+          onPress={handleAppleLogin}
+        />
+      )}
       
       <Text style={styles.note}>
         * To enable actual login, you must add Client IDs in the code.
@@ -260,16 +161,10 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 3,
   },
-  googleButton: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#ddd',
-  },
-  facebookButton: {
-    backgroundColor: '#1877F2',
-  },
-  instagramButton: {
-    backgroundColor: '#E1306C',
+  appleButton: {
+    width: '100%',
+    height: 50,
+    marginBottom: 15,
   },
   buttonText: {
     color: '#fff',

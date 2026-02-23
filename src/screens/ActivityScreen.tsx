@@ -263,10 +263,11 @@ export default function ActivityScreen() {
     }, [dailyTopic, handleVoteDaily]);
 
     const renderPollItem = useCallback(({ item }: { item: any }) => {
+        const hasUserImage = !!item.user_image;
         return (
             <View style={styles.card}>
                 <View style={styles.userHeader}>
-                    {item.user_image ? (
+                    {hasUserImage ? (
                         <Image source={{ uri: item.user_image }} style={styles.avatar} />
                     ) : (
                         <View style={[styles.avatar, styles.avatarPlaceholder]}>

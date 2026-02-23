@@ -1,11 +1,11 @@
 branch-defaults:
   default:
-    environment: dating-app-prod
+    environment: dating-server-tony-env
 global:
   application_name: dating-app-backend
   branch: null
   default_ec2_keyname: null
-  default_platform: Node.js 20 running on 64bit Amazon Linux 2023
+  default_platform: Node.js 24 running on 64bit Amazon Linux 2023
   default_region: ap-southeast-2
   include_git_submodules: true
   instance_profile: null

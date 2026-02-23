@@ -325,8 +325,12 @@ export default function ChatDetailScreen() {
                 <View style={[styles.avatar, { backgroundColor: image }]}>
                     <Text style={styles.avatarText}>{name[0]}</Text>
                 </View>
-            ) : (
+            ) : image ? (
                 <Image source={{ uri: image }} style={styles.avatar} />
+            ) : (
+                <View style={[styles.avatar, { backgroundColor: '#ddd' }]}>
+                    <Text style={styles.avatarText}>{name[0]}</Text>
+                </View>
             )}
             <Text style={styles.headerName}>{name}</Text>
         </TouchableOpacity>

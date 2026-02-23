@@ -32,7 +32,6 @@ export default function ChatScreen() {
 
   const loadChats = useCallback(async () => {
     try {
-        // 1. Get Current User ID first
         const profileString = await AsyncStorage.getItem('userProfile');
         let myId = currentUserId;
         if (profileString) {
@@ -41,9 +40,12 @@ export default function ChatScreen() {
             setCurrentUserId(myId);
         }
 
-        // 2. Get Chats
-        const data = await ChatService.getChats();
-        
+        if (!myId) {
+            setChats([]);
+            return;
+        }
+
+        const data = await ChatService.getChats(myId);
         setChats(data);
     } catch (error) {
         console.error('Error loading chats:', error);
@@ -108,6 +110,7 @@ export default function ChatScreen() {
 
   const renderItem = useCallback(({ item }: { item: ChatSession }) => {
     const isColor = item.user.image && item.user.image.startsWith('#');
+    const hasImage = !!item.user.image && !isColor;
     const isPendingOutgoing = item.status === 'pending' && String(item.initiatorId) === String(currentUserId);
     
     return (
@@ -130,8 +133,12 @@ export default function ChatScreen() {
             <View style={[styles.avatar, { backgroundColor: item.user.image }]}>
                 <Text style={styles.initial}>{item.user.name[0]}</Text>
             </View>
-        ) : (
+        ) : hasImage ? (
             <Image source={{ uri: item.user.image }} style={styles.avatar} />
+        ) : (
+            <View style={[styles.avatar, { backgroundColor: '#ddd' }]}>
+                <Text style={styles.initial}>{item.user.name[0]}</Text>
+            </View>
         )}
         <View style={styles.content}>
             <View style={styles.nameRow}>
@@ -148,6 +155,7 @@ export default function ChatScreen() {
 
   const renderRequestItem = useCallback(({ item }: { item: ChatSession }) => {
     const isColor = item.user.image && item.user.image.startsWith('#');
+    const hasImage = !!item.user.image && !isColor;
     const isProcessing = processingReqId === item.id;
 
     return (
@@ -157,8 +165,12 @@ export default function ChatScreen() {
                     <View style={[styles.avatarSmall, { backgroundColor: item.user.image }]}>
                         <Text style={styles.initialSmall}>{item.user.name[0]}</Text>
                     </View>
-                ) : (
+                ) : hasImage ? (
                     <Image source={{ uri: item.user.image }} style={styles.avatarSmall} />
+                ) : (
+                    <View style={[styles.avatarSmall, { backgroundColor: '#ddd' }]}>
+                        <Text style={styles.initialSmall}>{item.user.name[0]}</Text>
+                    </View>
                 )}
                 <View>
                     <Text style={styles.requestName}>{item.user.name}</Text>

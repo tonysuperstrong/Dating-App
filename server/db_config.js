@@ -79,7 +79,6 @@ const initDb = async () => {
         table.bigInteger('timestamp');
       });
 
-      // Scheduled Dates Table
       await db.schema.createTable('scheduled_dates', table => {
         table.string('id').primary();
         table.string('sender_id').references('users.id');
@@ -88,8 +87,16 @@ const initDb = async () => {
         table.string('time');
         table.string('location');
         table.text('description');
-        table.string('status'); // pending, accepted, rejected, cancelled
+        table.string('status');
         table.bigInteger('timestamp');
+      });
+
+      await db.schema.createTable('followers', table => {
+        table.string('id').primary();
+        table.string('follower_id').references('users.id');
+        table.string('followed_id').references('users.id');
+        table.bigInteger('timestamp');
+        table.unique(['follower_id', 'followed_id']);
       });
       
       console.log('Schema initialized successfully.');
@@ -102,7 +109,6 @@ const initDb = async () => {
              });
         }
 
-        // Check for scheduled_dates table existence (migration)
         const hasDatesTable = await db.schema.hasTable('scheduled_dates');
         if (!hasDatesTable) {
              await db.schema.createTable('scheduled_dates', table => {
@@ -115,6 +121,17 @@ const initDb = async () => {
                 table.text('description');
                 table.string('status');
                 table.bigInteger('timestamp');
+             });
+        }
+
+        const hasFollowers = await db.schema.hasTable('followers');
+        if (!hasFollowers) {
+             await db.schema.createTable('followers', table => {
+                 table.string('id').primary();
+                 table.string('follower_id').references('users.id');
+                 table.string('followed_id').references('users.id');
+                 table.bigInteger('timestamp');
+                 table.unique(['follower_id', 'followed_id']);
              });
         }
 

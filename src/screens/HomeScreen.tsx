@@ -314,7 +314,15 @@ export default function HomeScreen() {
       }
 
       const results = await ApiService.searchUsers(searchQuery, currentUserId);
-      setSearchResults(results);
+      const seenNames = new Set<string>();
+      const uniqueResults = results.filter((u: any) => {
+        const key = (u.name || u.id || '').toString();
+        if (!key) return true;
+        if (seenNames.has(key)) return false;
+        seenNames.add(key);
+        return true;
+      });
+      setSearchResults(uniqueResults);
   }, [searchQuery]);
 
   const handleSendRequest = useCallback(async (user: User) => {
@@ -340,27 +348,35 @@ export default function HomeScreen() {
       }
   }, []);
 
-  const renderSearchResultItem = useCallback(({ item }: { item: User }) => (
-    <View style={styles.friendItem}>
-        {item.image && item.image.startsWith('#') ? (
-            <View style={[styles.friendAvatar, { backgroundColor: item.image }]}>
-                <Text style={{color:'#fff', fontSize:18}}>{item.name[0]}</Text>
-            </View>
-        ) : (
-            <Image source={{ uri: item.image }} style={styles.friendAvatar} />
-        )}
-        <View style={{flex: 1}}>
-            <Text style={styles.friendName}>{item.name}</Text>
-            <Text style={styles.friendStatus}>@{item.username}</Text>
-        </View>
-        <TouchableOpacity 
-            style={styles.actionButton} 
-            onPress={() => handleSendRequest(item)}
-        >
-            <Ionicons name="person-add" size={20} color="#E5566D" />
-        </TouchableOpacity>
-    </View>
-  ), [handleSendRequest]);
+  const renderSearchResultItem = useCallback(({ item }: { item: User }) => {
+    const isColor = item.image && item.image.startsWith('#');
+    const hasImage = !!item.image && !isColor;
+    return (
+      <View style={styles.friendItem}>
+          {isColor ? (
+              <View style={[styles.friendAvatar, { backgroundColor: item.image }]}>
+                  <Text style={{color:'#fff', fontSize:18}}>{item.name[0]}</Text>
+              </View>
+          ) : hasImage ? (
+              <Image source={{ uri: item.image }} style={styles.friendAvatar} />
+          ) : (
+              <View style={[styles.friendAvatar, { backgroundColor: '#ddd' }]}>
+                  <Text style={{color:'#fff', fontSize:18}}>{item.name[0]}</Text>
+              </View>
+          )}
+          <View style={{flex: 1}}>
+              <Text style={styles.friendName}>{item.name}</Text>
+              <Text style={styles.friendStatus}>@{item.username}</Text>
+          </View>
+          <TouchableOpacity 
+              style={styles.actionButton} 
+              onPress={() => handleSendRequest(item)}
+          >
+              <Ionicons name="person-add" size={20} color="#E5566D" />
+          </TouchableOpacity>
+      </View>
+    );
+  }, [handleSendRequest]);
 
   const renderCategoryButton = useCallback((type: 'date' | 'sport', label: string, icon: string) => (
     <TouchableOpacity 

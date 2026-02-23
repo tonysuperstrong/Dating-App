@@ -10,8 +10,8 @@ interface CardProps {
 }
 
 export default function Card({ user }: CardProps) {
-  // Check if user.image is a hex color (placeholder) or a URL
-  const isColor = user.image.startsWith('#');
+  const isColor = user.image && user.image.startsWith('#');
+  const hasImage = !!user.image && !isColor;
 
   return (
     <View style={styles.card}>
@@ -19,8 +19,12 @@ export default function Card({ user }: CardProps) {
         <View style={[styles.image, { backgroundColor: user.image }]}>
           <Text style={styles.initial}>{user.name[0]}</Text>
         </View>
-      ) : (
+      ) : hasImage ? (
         <Image source={{ uri: user.image }} style={styles.image} resizeMode="cover" />
+      ) : (
+        <View style={[styles.image, { backgroundColor: '#ddd' }]}>
+          <Text style={styles.initial}>{user.name[0]}</Text>
+        </View>
       )}
       
       <LinearGradient

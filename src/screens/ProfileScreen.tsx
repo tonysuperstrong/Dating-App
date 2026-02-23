@@ -33,6 +33,12 @@ interface UserProfile {
   voice_bio?: string;
 }
 
+interface FollowerStats {
+  followersCount: number;
+  followingCount: number;
+  isFollowing: boolean;
+}
+
 export default function ProfileScreen() {
   const navigation = useNavigation<any>();
   const route = useRoute<any>();
@@ -42,6 +48,17 @@ export default function ProfileScreen() {
   const [isCurrentUser, setIsCurrentUser] = useState(false);
   const [loading, setLoading] = useState(true);
   const [sound, setSound] = useState<Audio.Sound | null>(null);
+  const [followerStats, setFollowerStats] = useState<FollowerStats>({
+    followersCount: 0,
+    followingCount: 0,
+    isFollowing: false,
+  });
+  const [followersModalVisible, setFollowersModalVisible] = useState(false);
+  const [followingModalVisible, setFollowingModalVisible] = useState(false);
+  const [followersList, setFollowersList] = useState<UserProfile[]>([]);
+  const [followingList, setFollowingList] = useState<UserProfile[]>([]);
+  const [followersLoading, setFollowersLoading] = useState(false);
+  const [followingLoading, setFollowingLoading] = useState(false);
 
   useFocusEffect(
     useCallback(() => {
@@ -84,6 +101,18 @@ export default function ProfileScreen() {
           if (activeProfileId) {
               const fetchedPosts = await ApiService.getPosts(undefined, activeProfileId);
               setPosts(fetchedPosts);
+
+              const stats = await ApiService.getFollowStats(
+                activeProfileId,
+                storedProfile ? storedProfile.id : undefined
+              );
+              if (stats) {
+                setFollowerStats({
+                  followersCount: stats.followersCount || 0,
+                  followingCount: stats.followingCount || 0,
+                  isFollowing: !!stats.isFollowing,
+                });
+              }
           }
         } catch (error) {
           // console.error('Failed to load profile', error);
@@ -125,6 +154,72 @@ export default function ProfileScreen() {
       }
   };
 
+  const handleToggleFollow = async () => {
+      if (!profile || !profile.id) return;
+      try {
+          const storedProfileStr = await AsyncStorage.getItem('userProfile');
+          if (!storedProfileStr) {
+              Alert.alert('Error', 'You must be logged in to follow users.');
+              return;
+          }
+          const myProfile = JSON.parse(storedProfileStr);
+
+          if (String(myProfile.id) === String(profile.id)) {
+              return;
+          }
+
+          if (followerStats.isFollowing) {
+              const result = await ApiService.unfollowUser(myProfile.id, profile.id);
+              if (result && result.success) {
+                  setFollowerStats(prev => ({
+                      ...prev,
+                      isFollowing: false,
+                      followersCount: prev.followersCount > 0 ? prev.followersCount - 1 : 0,
+                  }));
+              }
+          } else {
+              const result = await ApiService.followUser(myProfile.id, profile.id);
+              if (result && result.success) {
+                  setFollowerStats(prev => ({
+                      ...prev,
+                      isFollowing: true,
+                      followersCount: prev.followersCount + 1,
+                  }));
+              }
+          }
+      } catch (error) {
+          Alert.alert('Error', 'Failed to update follow status.');
+      }
+  };
+
+  const handleOpenFollowers = async () => {
+      if (!profile || !profile.id) return;
+      try {
+          setFollowersLoading(true);
+          setFollowersModalVisible(true);
+          const users = await ApiService.getFollowers(profile.id);
+          setFollowersList(users || []);
+      } catch (error) {
+          Alert.alert('Error', 'Failed to load followers.');
+      } finally {
+          setFollowersLoading(false);
+      }
+  };
+
+  const handleOpenFollowing = async () => {
+      if (!profile || !profile.id) return;
+      try {
+          setFollowingLoading(true);
+          setFollowingModalVisible(true);
+          const users = await ApiService.getFollowing(profile.id);
+          setFollowingList(users || []);
+      } catch (error) {
+          Alert.alert('Error', 'Failed to load following.');
+      } finally {
+          setFollowingLoading(false);
+      }
+  };
+
   const playVoiceBio = async () => {
       if (profile?.voice_bio) {
           try {
@@ -154,6 +249,17 @@ export default function ProfileScreen() {
       </View>
       
       <Text style={styles.name}>{profile?.username ? `@${profile.username}` : 'Profile'}</Text>
+
+      <View style={styles.statsRow}>
+        <TouchableOpacity style={styles.statItem} onPress={handleOpenFollowers}>
+          <Text style={styles.statNumber}>{followerStats.followersCount}</Text>
+          <Text style={styles.statLabel}>Followers</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.statItem} onPress={handleOpenFollowing}>
+          <Text style={styles.statNumber}>{followerStats.followingCount}</Text>
+          <Text style={styles.statLabel}>Following</Text>
+        </TouchableOpacity>
+      </View>
       <Text style={styles.bio}>{(profile?.bio && profile.bio.trim()) || 'No bio available.'}</Text>
       
       {profile?.voice_bio && (
@@ -272,7 +378,7 @@ export default function ProfileScreen() {
       )}
     </>
     );
-  }, [profile, posts.length]);
+  }, [profile, posts.length, followerStats.followersCount, followerStats.followingCount]);
 
   const renderFooter = useCallback(() => (
     <>
@@ -297,6 +403,22 @@ export default function ProfileScreen() {
       ) : (
         <View style={styles.actionContainer}>
              <TouchableOpacity 
+                 style={[
+                   styles.followButton,
+                   followerStats.isFollowing && styles.followingButton
+                 ]}
+                 onPress={handleToggleFollow}
+             >
+                 <Text
+                   style={[
+                     styles.followButtonText,
+                     followerStats.isFollowing && styles.followingButtonText
+                   ]}
+                 >
+                   {followerStats.isFollowing ? 'Following' : 'Follow'}
+                 </Text>
+             </TouchableOpacity>
+             <TouchableOpacity 
                  style={styles.messageButton}
                  onPress={handleMessage}
              >
@@ -305,7 +427,7 @@ export default function ProfileScreen() {
          </View>
       )}
     </>
-  ), [isCurrentUser, navigation, handleMessage]);
+  ), [isCurrentUser, navigation, handleMessage, followerStats.isFollowing, handleToggleFollow]);
 
   const renderPostItem = useCallback(({ item }: { item: any }) => (
     <TouchableOpacity 
@@ -352,6 +474,124 @@ export default function ProfileScreen() {
                   )}
               </View>
           </Modal>
+
+          <Modal
+            visible={followersModalVisible}
+            animationType="slide"
+            onRequestClose={() => setFollowersModalVisible(false)}
+          >
+            <View style={styles.listModalContainer}>
+              <View style={styles.listModalHeader}>
+                <Text style={styles.listModalTitle}>Followers</Text>
+                <TouchableOpacity onPress={() => setFollowersModalVisible(false)}>
+                  <Text style={styles.listModalCloseText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+              {followersLoading ? (
+                <View style={styles.listLoaderContainer}>
+                  <ActivityIndicator size="large" color="#E94057" />
+                </View>
+              ) : (
+                <FlatList
+                  data={followersList}
+                  keyExtractor={(item) => item.id}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.listItem}
+                      onPress={() => {
+                        setFollowersModalVisible(false);
+                        navigation.navigate('Profile', { userId: item.id });
+                      }}
+                    >
+                      {item.image && !item.image.startsWith('#') ? (
+                        <Image source={{ uri: item.image }} style={styles.listAvatar} />
+                      ) : (
+                        <View style={[styles.listAvatar, styles.listAvatarPlaceholder]}>
+                          <Text style={styles.listAvatarText}>
+                            {item.username?.[0]?.toUpperCase() || '?'}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.listTextContainer}>
+                        <Text style={styles.listUsername}>
+                          {item.username ? `@${item.username}` : 'User'}
+                        </Text>
+                        {item.bio ? (
+                          <Text style={styles.listBio} numberOfLines={1}>
+                            {item.bio}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={
+                    <View style={styles.listEmptyContainer}>
+                      <Text style={styles.listEmptyText}>No followers yet.</Text>
+                    </View>
+                  }
+                />
+              )}
+            </View>
+          </Modal>
+
+          <Modal
+            visible={followingModalVisible}
+            animationType="slide"
+            onRequestClose={() => setFollowingModalVisible(false)}
+          >
+            <View style={styles.listModalContainer}>
+              <View style={styles.listModalHeader}>
+                <Text style={styles.listModalTitle}>Following</Text>
+                <TouchableOpacity onPress={() => setFollowingModalVisible(false)}>
+                  <Text style={styles.listModalCloseText}>Close</Text>
+                </TouchableOpacity>
+              </View>
+              {followingLoading ? (
+                <View style={styles.listLoaderContainer}>
+                  <ActivityIndicator size="large" color="#E94057" />
+                </View>
+              ) : (
+                <FlatList
+                  data={followingList}
+                  keyExtractor={(item) => item.id}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.listItem}
+                      onPress={() => {
+                        setFollowingModalVisible(false);
+                        navigation.navigate('Profile', { userId: item.id });
+                      }}
+                    >
+                      {item.image && !item.image.startsWith('#') ? (
+                        <Image source={{ uri: item.image }} style={styles.listAvatar} />
+                      ) : (
+                        <View style={[styles.listAvatar, styles.listAvatarPlaceholder]}>
+                          <Text style={styles.listAvatarText}>
+                            {item.username?.[0]?.toUpperCase() || '?'}
+                          </Text>
+                        </View>
+                      )}
+                      <View style={styles.listTextContainer}>
+                        <Text style={styles.listUsername}>
+                          {item.username ? `@${item.username}` : 'User'}
+                        </Text>
+                        {item.bio ? (
+                          <Text style={styles.listBio} numberOfLines={1}>
+                            {item.bio}
+                          </Text>
+                        ) : null}
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={
+                    <View style={styles.listEmptyContainer}>
+                      <Text style={styles.listEmptyText}>Not following anyone yet.</Text>
+                    </View>
+                  }
+                />
+              )}
+            </View>
+          </Modal>
         </>
       )}
     </View>
@@ -396,6 +636,24 @@ const styles = StyleSheet.create({
     fontSize: 24,
     fontWeight: 'bold',
     marginBottom: 10,
+  },
+  statsRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    marginBottom: 10,
+  },
+  statItem: {
+    alignItems: 'center',
+    marginHorizontal: 15,
+  },
+  statNumber: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  statLabel: {
+    fontSize: 12,
+    color: '#777',
   },
   bio: {
     fontSize: 16,
@@ -554,11 +812,105 @@ const styles = StyleSheet.create({
     width: '100%',
     height: '80%',
   },
+  listModalContainer: {
+    flex: 1,
+    backgroundColor: '#fff',
+  },
+  listModalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  listModalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  listModalCloseText: {
+    fontSize: 16,
+    color: '#E94057',
+  },
+  listLoaderContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  listItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f5f5f5',
+  },
+  listAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    marginRight: 12,
+    backgroundColor: '#ddd',
+  },
+  listAvatarPlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  listAvatarText: {
+    color: '#fff',
+    fontSize: 20,
+    fontWeight: 'bold',
+  },
+  listTextContainer: {
+    flex: 1,
+  },
+  listUsername: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  listBio: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+  },
+  listEmptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 40,
+  },
+  listEmptyText: {
+    fontSize: 14,
+    color: '#999',
+  },
   actionContainer: {
     width: '100%',
     paddingHorizontal: 20,
     marginBottom: 30,
     alignItems: 'center',
+  },
+  followButton: {
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#E94057',
+    paddingVertical: 12,
+    paddingHorizontal: 30,
+    borderRadius: 30,
+    marginBottom: 10,
+  },
+  followButtonText: {
+    color: '#E94057',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  followingButton: {
+    backgroundColor: '#E94057',
+  },
+  followingButtonText: {
+    color: '#fff',
   },
   messageButton: {
     backgroundColor: '#E94057',

@@ -58,8 +58,16 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
       setNoMoreUsers(false);
       const fetchedUsers = await ApiService.getUsers(currentUserId, 1, 10);
       const filteredUsers = fetchedUsers.filter((u: any) => u.id !== currentUserId);
-      setUsers(filteredUsers);
-      if (filteredUsers.length === 0) setNoMoreUsers(true);
+      const seenNames = new Set<string>();
+      const uniqueUsers = filteredUsers.filter((u: any) => {
+        const key = (u.name || u.id || '').toString();
+        if (!key) return true;
+        if (seenNames.has(key)) return false;
+        seenNames.add(key);
+        return true;
+      });
+      setUsers(uniqueUsers);
+      if (uniqueUsers.length === 0) setNoMoreUsers(true);
       if (fetchedUsers.length < 10) setHasMore(false);
       setPage(2);
     } catch (error) {
@@ -76,11 +84,19 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
           
           if (fetchedUsers.length > 0) {
               const filteredUsers = fetchedUsers.filter((u: any) => u.id !== currentUserId);
-              // Filter out duplicates that might already exist in the list
-              const newUniqueUsers = filteredUsers.filter((u: any) => !users.some(existing => existing.id === u.id));
+              const seenNames = new Set<string>(
+                users.map(u => (u.name || u.id || '').toString())
+              );
+              const deduped = filteredUsers.filter((u: any) => {
+                const key = (u.name || u.id || '').toString();
+                if (!key) return true;
+                if (seenNames.has(key)) return false;
+                seenNames.add(key);
+                return true;
+              });
               
-              if (newUniqueUsers.length > 0) {
-                  setUsers(prev => [...prev, ...newUniqueUsers]);
+              if (deduped.length > 0) {
+                  setUsers(prev => [...prev, ...deduped]);
                   setPage(prev => prev + 1);
               }
           }
@@ -216,6 +232,7 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
 
   const renderCard = useCallback((user: User, isFront: boolean) => {
     const isColor = user.image && user.image.startsWith('#');
+    const hasImage = !!user.image && !isColor;
     
     return (
       <View style={styles.card}>
@@ -223,8 +240,12 @@ export default function SwipeDeck({ currentUserId }: SwipeDeckProps) {
             <View style={[styles.cardImage, { backgroundColor: user.image, justifyContent: 'center', alignItems: 'center' }]}>
                 <Text style={{fontSize: 80}}>{user.name[0]}</Text>
             </View>
-        ) : (
+        ) : hasImage ? (
             <Image source={{ uri: user.image }} style={styles.cardImage} resizeMode="cover" />
+        ) : (
+            <View style={[styles.cardImage, { backgroundColor: '#ddd', justifyContent: 'center', alignItems: 'center' }]}>
+                <Text style={{fontSize: 80}}>{user.name[0]}</Text>
+            </View>
         )}
         <View style={styles.cardInfo}>
           <Text style={styles.cardName}>{user.name}, {user.age}</Text>

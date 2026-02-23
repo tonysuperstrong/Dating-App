@@ -84,12 +84,8 @@ export default function ProfileSetupScreen() {
   const [gender, setGender] = useState('');
   const [age, setAge] = useState('');
   
-  // Phone & Verification State
   const [countryCode, setCountryCode] = useState('+1');
   const [phoneInput, setPhoneInput] = useState('');
-  const [isPhoneVerified, setIsPhoneVerified] = useState(false);
-  const [isVerifying, setIsVerifying] = useState(false);
-  const [verificationCode, setVerificationCode] = useState('');
   
   // Voice Bio State
   const [recording, setRecording] = useState<Audio.Recording | null>(null);
@@ -140,10 +136,6 @@ export default function ProfileSetupScreen() {
             setGender(profile.gender || '');
             setAge(profile.age ? profile.age.toString() : '');
             setVoiceBioUri(profile.voice_bio || null);
-            
-            if (profile.phone_number) {
-                setIsPhoneVerified(true);
-            }
           }
         } catch (error) {
           console.error('Error loading profile:', error);
@@ -162,53 +154,27 @@ export default function ProfileSetupScreen() {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ['images'],
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.5,
     });
 
     if (!result.canceled) {
-      setImage(result.assets[0].uri);
+      const localUri = result.assets[0].uri;
+      setImage(localUri);
+
+      try {
+        const uploadedUrl = await ApiService.uploadImage(localUri);
+        setImage(uploadedUrl);
+      } catch (error) {
+        Alert.alert(
+          'Upload Error',
+          'Failed to upload profile picture. The local image will be used, which may not be visible on other devices.'
+        );
+      }
     }
   }, []);
-
-  const handleSendOtp = useCallback(async () => {
-    if (!phoneInput) {
-        Alert.alert('Error', 'Please enter a phone number');
-        return;
-    }
-    
-    setIsVerifying(true);
-    const fullNumber = countryCode + phoneInput;
-    const response = await ApiService.sendOtp(fullNumber);
-    
-    if (response.error) {
-        Alert.alert('Error', response.error);
-        setIsVerifying(false);
-    } else {
-        // Show code for demo convenience
-        Alert.alert('Success', `Verification code sent! Code: ${response.code}`);
-    }
-  }, [phoneInput, countryCode]);
-
-  const handleVerifyOtp = useCallback(async () => {
-    if (!verificationCode) {
-        Alert.alert('Error', 'Please enter the code');
-        return;
-    }
-    
-    const fullNumber = countryCode + phoneInput;
-    const response = await ApiService.verifyOtp(fullNumber, verificationCode);
-    
-    if (response.success) {
-        setIsPhoneVerified(true);
-        setIsVerifying(false);
-        Alert.alert('Success', 'Phone verified!');
-    } else {
-        Alert.alert('Error', 'Invalid code');
-    }
-  }, [verificationCode, countryCode, phoneInput]);
 
   async function startRecording() {
     try {
@@ -282,30 +248,32 @@ export default function ProfileSetupScreen() {
   };
 
   const handleSave = useCallback(async () => {
-    if (!username || !password || !bio || !hobbies || !image || !country || !language || !ethnicity || !gender || !age) {
+    if (
+      !username ||
+      (!isEditing && !password) ||
+      !bio ||
+      !hobbies ||
+      !image ||
+      !country ||
+      !language ||
+      !ethnicity ||
+      !gender ||
+      !age
+    ) {
       Alert.alert('Missing Information', 'Please fill in all fields and upload a profile picture.');
       return;
     }
-    // ... (rest of function)
 
-
-    // Check Phone Verification
-    if (phoneInput && !isPhoneVerified) {
-        Alert.alert('Verification Required', 'Please verify your phone number before saving.');
-        return;
-    }
-    
     try {
-      const userProfile = {
+      const baseProfile: any = {
         username: username.trim(),
-        password: password.trim(),
-        name: username.trim(), // Use username as name for now
+        name: username.trim(),
         age: parseInt(age, 10),
         bio: bio.trim(),
         image,
-        type: 'date', // Default type
+        type: 'date',
         location: country.trim(),
-        hobbies: hobbies.split(',').map(h => h.trim()).filter(h => h), // Convert string to array and filter empty
+        hobbies: hobbies.split(',').map(h => h.trim()).filter(h => h),
         language: language.trim(),
         ethnicity: ethnicity.trim(),
         gender: gender.trim(),
@@ -313,16 +281,29 @@ export default function ProfileSetupScreen() {
         voice_bio: voiceBioUri,
       };
 
+      let userProfile = baseProfile;
+
+      if (isEditing) {
+        if (password) {
+          userProfile = {
+            ...baseProfile,
+            password: password.trim(),
+          };
+        }
+      } else {
+        userProfile = {
+          ...baseProfile,
+          password: password.trim(),
+        };
+      }
+
       let response;
       if (isEditing && userId) {
-        // Update existing user
         response = await ApiService.updateUser(userId, userProfile);
       } else {
-        // Create new user
         response = await ApiService.signup(userProfile);
       }
       
-      // Save complete profile with ID from backend to AsyncStorage
       const profileToSave = { ...userProfile, id: response.id };
       await AsyncStorage.setItem('userProfile', JSON.stringify(profileToSave));
       
@@ -335,25 +316,20 @@ export default function ProfileSetupScreen() {
       console.error('Save error:', error);
       Alert.alert('Error', 'Failed to save profile data. Please try again.');
     }
-  }, [username, password, bio, hobbies, image, country, language, ethnicity, gender, age, phoneInput, isPhoneVerified, countryCode, isEditing, userId, navigation]);
+  }, [username, password, bio, hobbies, image, country, language, ethnicity, gender, age, phoneInput, countryCode, isEditing, userId, navigation, voiceBioUri]);
 
   const handleNext = useCallback(() => {
     // Validation for Step 1
     if (step === 1) {
-      if (!username || !password) {
+      if (!username || (!isEditing && !password)) {
         Alert.alert('Missing Information', 'Please fill in username and password.');
         return;
       }
     }
     
-    // Validation for Step 2
     if (step === 2) {
       if (!age || !gender || !ethnicity || !country || !language) {
          Alert.alert('Missing Information', 'Please fill in all personal details.');
-         return;
-      }
-      if (phoneInput && !isPhoneVerified) {
-         Alert.alert('Verification Required', 'Please verify your phone number.');
          return;
       }
     }
@@ -371,7 +347,7 @@ export default function ProfileSetupScreen() {
     } else {
       handleSave();
     }
-  }, [step, username, password, age, gender, ethnicity, country, language, phoneInput, isPhoneVerified, bio, hobbies, handleSave]);
+  }, [step, username, password, age, gender, ethnicity, country, language, phoneInput, bio, hobbies, handleSave, isEditing]);
 
   const handleBack = useCallback(() => {
     if (step > 1) {
@@ -521,44 +497,13 @@ export default function ProfileSetupScreen() {
                 style={[styles.input, { flex: 1 }]}
                 placeholder="Number"
                 value={phoneInput}
-                onChangeText={(text) => {
-                    setPhoneInput(text);
-                    setIsPhoneVerified(false); // Reset verification on change
-                }}
+                onChangeText={setPhoneInput}
                 keyboardType="phone-pad"
             />
-            
-            <TouchableOpacity 
-                style={[styles.button, { marginTop: 0, marginLeft: 10, padding: 15, backgroundColor: isPhoneVerified ? '#4CAF50' : '#E94057' }]}
-                onPress={handleSendOtp}
-                disabled={isPhoneVerified}
-            >
-                <Text style={[styles.buttonText, { fontSize: 14 }]}>
-                    {isPhoneVerified ? 'Verified' : 'Verify'}
-                </Text>
-            </TouchableOpacity>
         </View>
-
-        {isVerifying && (
-            <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center' }}>
-                <TextInput
-                    style={[styles.input, { flex: 1, marginRight: 10 }]}
-                    placeholder="Enter Code"
-                    value={verificationCode}
-                    onChangeText={setVerificationCode}
-                    keyboardType="number-pad"
-                />
-                <TouchableOpacity 
-                    style={[styles.button, { marginTop: 0, padding: 15 }]}
-                    onPress={handleVerifyOtp}
-                >
-                    <Text style={[styles.buttonText, { fontSize: 14 }]}>Confirm</Text>
-                </TouchableOpacity>
-            </View>
-        )}
       </View>
     </>
-  ), [age, gender, ethnicity, country, language, countryCode, phoneInput, isPhoneVerified, isVerifying, verificationCode, handleSendOtp, handleVerifyOtp]);
+  ), [age, gender, ethnicity, country, language, countryCode, phoneInput]);
 
   const renderStep3 = useCallback(() => (
     <>

@@ -4,7 +4,9 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cors = require('cors');
 const bcrypt = require('bcryptjs');
-const db = require('./db_config'); // Use Knex instance
+const db = require('./db_config');
+const multer = require('multer');
+const { S3Client, PutObjectCommand } = require('@aws-sdk/client-s3');
 
 const http = require('http');
 const { Server } = require("socket.io");
@@ -19,12 +21,59 @@ const io = new Server(server, {
 });
 
 const PORT = process.env.PORT || 3000;
+const AWS_REGION = process.env.AWS_REGION || 'ap-southeast-2';
+const S3_BUCKET = process.env.S3_BUCKET;
+
+const s3 = new S3Client({
+  region: AWS_REGION,
+  credentials: process.env.AWS_ACCESS_KEY_ID && process.env.AWS_SECRET_ACCESS_KEY ? {
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY
+  } : undefined
+});
+
+const upload = multer({ storage: multer.memoryStorage() });
 
 app.use(cors());
 app.use(bodyParser.json());
 
 app.get('/', (req, res) => {
   res.send('OK');
+});
+
+app.post('/upload/image', upload.single('file'), async (req, res) => {
+  if (!S3_BUCKET) {
+    return res.status(500).json({ error: 'S3 bucket not configured' });
+  }
+
+  const file = req.file;
+
+  if (!file) {
+    return res.status(400).json({ error: 'No file uploaded' });
+  }
+
+  const ext = path.extname(file.originalname) || '.jpg';
+  const key = `uploads/${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}${ext}`;
+
+  try {
+    const command = new PutObjectCommand({
+      Bucket: S3_BUCKET,
+      Key: key,
+      Body: file.buffer,
+      ContentType: file.mimetype
+    });
+
+    await s3.send(command);
+
+    const url = `https://${S3_BUCKET}.s3.${AWS_REGION}.amazonaws.com/${key}`;
+    res.json({ url });
+  } catch (error) {
+    console.error('S3 upload error:', error);
+    res.status(500).json({
+      error: 'Failed to upload image',
+      details: error && error.message ? error.message : undefined
+    });
+  }
 });
 
 // Socket.io Logic
@@ -49,21 +98,16 @@ io.on('connection', (socket) => {
 // Helper to generate ID
 const generateId = () => Date.now().toString(36) + Math.random().toString(36).substr(2);
 
-// OTP Store (In-Memory)
 const otpStore = new Map();
 
-// POST /auth/send-otp
 app.post('/auth/send-otp', (req, res) => {
     const { phoneNumber } = req.body;
     if (!phoneNumber) {
         return res.status(400).json({ error: 'Phone number is required' });
     }
 
-    // Generate 6-digit code
-    // const code = Math.floor(100000 + Math.random() * 900000).toString();
-    const code = '123456'; // Fixed for development convenience
+    const code = '123456';
     
-    // Store with timestamp (expires in 5 mins)
     otpStore.set(phoneNumber, {
         code,
         expires: Date.now() + 5 * 60 * 1000
@@ -71,8 +115,7 @@ app.post('/auth/send-otp', (req, res) => {
 
     console.log(`[OTP] Generated code ${code} for ${phoneNumber}`);
 
-    // In a real app, send via SMS gateway. Here, return it for testing.
-    res.json({ success: true, message: 'OTP sent', code }); 
+    res.json({ success: true, message: 'OTP sent', code });
 });
 
 // POST /auth/verify-otp
@@ -209,6 +252,131 @@ app.get('/users/:id', async (req, res) => {
   }
 });
 
+app.post('/follow', async (req, res) => {
+  const { followerId, followedId } = req.body;
+
+  if (!followerId || !followedId) {
+      return res.status(400).json({ error: 'followerId and followedId are required' });
+  }
+
+  if (String(followerId) === String(followedId)) {
+      return res.status(400).json({ error: 'Cannot follow yourself' });
+  }
+
+  try {
+      const existing = await db('followers').where({ follower_id: followerId, followed_id: followedId }).first();
+      if (existing) {
+          return res.json({ success: true, following: true });
+      }
+
+      const id = generateId();
+      const timestamp = Date.now();
+      await db('followers').insert({ id, follower_id: followerId, followed_id: followedId, timestamp });
+      res.json({ success: true, following: true });
+  } catch (err) {
+      res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/unfollow', async (req, res) => {
+  const { followerId, followedId } = req.body;
+
+  if (!followerId || !followedId) {
+      return res.status(400).json({ error: 'followerId and followedId are required' });
+  }
+
+  try {
+      await db('followers').where({ follower_id: followerId, followed_id: followedId }).del();
+      res.json({ success: true, following: false });
+  } catch (err) {
+      res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/followers/stats', async (req, res) => {
+  const userId = req.query.userId;
+  const viewerId = req.query.viewerId;
+
+  if (!userId) {
+      return res.status(400).json({ error: 'userId is required' });
+  }
+
+  try {
+      const followersCountResult = await db('followers')
+          .where('followed_id', userId)
+          .count({ count: '*' })
+          .first();
+
+      const followingCountResult = await db('followers')
+          .where('follower_id', userId)
+          .count({ count: '*' })
+          .first();
+
+      let isFollowing = false;
+      if (viewerId) {
+          const existing = await db('followers')
+              .where({ follower_id: viewerId, followed_id: userId })
+              .first();
+          isFollowing = !!existing;
+      }
+
+      const followersCount = parseInt(followersCountResult.count, 10) || 0;
+      const followingCount = parseInt(followingCountResult.count, 10) || 0;
+
+      res.json({ followersCount, followingCount, isFollowing });
+  } catch (err) {
+      res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/followers', async (req, res) => {
+  const userId = req.query.userId;
+  const type = req.query.type;
+
+  if (!userId || !type) {
+      return res.status(400).json({ error: 'userId and type are required' });
+  }
+
+  try {
+      let rows;
+      if (type === 'followers') {
+          rows = await db('followers as f')
+              .join('users as u', 'f.follower_id', 'u.id')
+              .where('f.followed_id', userId)
+              .select('u.*');
+      } else if (type === 'following') {
+          rows = await db('followers as f')
+              .join('users as u', 'f.followed_id', 'u.id')
+              .where('f.follower_id', userId)
+              .select('u.*');
+      } else {
+          return res.status(400).json({ error: 'Invalid type' });
+      }
+
+      const users = rows.map(u => {
+          let hobbies = [];
+          if (u.hobbies) {
+              hobbies = u.hobbies.split(',').filter(Boolean);
+          }
+          let favoriteTeams = [];
+          try {
+              favoriteTeams = u.favorite_teams ? JSON.parse(u.favorite_teams) : [];
+          } catch (e) {
+              favoriteTeams = [];
+          }
+          return {
+              ...u,
+              hobbies,
+              favorite_teams: favoriteTeams
+          };
+      });
+
+      res.json(users);
+  } catch (err) {
+      res.status(500).json({ error: err.message });
+  }
+});
+
 // PUT /users/:id (Update Profile)
 app.put('/users/:id', async (req, res) => {
   const { id } = req.params;
@@ -222,12 +390,31 @@ app.put('/users/:id', async (req, res) => {
   const favoriteTeamsStr = Array.isArray(favorite_teams) ? JSON.stringify(favorite_teams) : favorite_teams;
 
   try {
-      await db('users').where('id', id).update({
-          username, password, name, age, bio, image, type, 
-          location, hobbies: hobbiesStr, language, ethnicity, gender,
-          personality_type, detailed_bio, partner_preferences, phone_number,
+      const updateData = {
+          username,
+          name,
+          age,
+          bio,
+          image,
+          type,
+          location,
+          hobbies: hobbiesStr,
+          language,
+          ethnicity,
+          gender,
+          personality_type,
+          detailed_bio,
+          partner_preferences,
+          phone_number,
           favorite_teams: favoriteTeamsStr
-      });
+      };
+
+      if (password && password.trim()) {
+          const hashedPassword = await bcrypt.hash(password, 10);
+          updateData.password = hashedPassword;
+      }
+
+      await db('users').where('id', id).update(updateData);
       res.json({ id, ...req.body });
   } catch (err) {
       res.status(500).json({ error: err.message });
@@ -314,6 +501,50 @@ app.post('/login', async (req, res) => {
       } else {
           res.status(401).json({ error: "Invalid credentials" });
       }
+  } catch (err) {
+      res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/auth/apple', async (req, res) => {
+  const { appleId, email, name } = req.body;
+
+  if (!appleId) {
+      return res.status(400).json({ error: 'appleId is required' });
+  }
+
+  try {
+      let user = await db('users').where('id', appleId).first();
+
+      if (!user) {
+          const username = email || `apple_${appleId.slice(0, 8)}`;
+          await db('users').insert({
+              id: appleId,
+              username,
+              password: '',
+              name: name || username,
+              age: 0,
+              bio: 'Logged in with Apple.',
+              image: '',
+              type: 'date',
+              location: '',
+              hobbies: '',
+              language: 'English',
+              ethnicity: '',
+              gender: '',
+              phone_number: ''
+          });
+          user = await db('users').where('id', appleId).first();
+      }
+
+      user.hobbies = user.hobbies ? user.hobbies.split(',') : [];
+      try {
+          user.favorite_teams = user.favorite_teams ? JSON.parse(user.favorite_teams) : [];
+      } catch (e) {
+          user.favorite_teams = [];
+      }
+      delete user.password;
+      res.json(user);
   } catch (err) {
       res.status(500).json({ error: err.message });
   }
@@ -474,7 +705,6 @@ app.post('/messages', async (req, res) => {
     }
 });
 
-// GET /posts (Feed)
 app.get('/posts', async (req, res) => {
   const currentUserId = req.query.currentUserId;
   const userId = req.query.userId; // Filter by specific user
@@ -513,12 +743,27 @@ app.get('/posts', async (req, res) => {
       query.limit(limit).offset(offset);
 
       const rows = await query;
-      const posts = rows.map(p => ({
-          ...p,
-          images: p.images ? p.images.split(',') : [],
-          isLiked: !!p.isLiked,
-          isArchived: !!p.is_archived
-      }));
+      const posts = rows.map(p => {
+          let images = [];
+          if (p.images) {
+              try {
+                  const parsed = JSON.parse(p.images);
+                  if (Array.isArray(parsed)) {
+                      images = parsed;
+                  } else if (typeof parsed === 'string') {
+                      images = [parsed];
+                  }
+              } catch (e) {
+                  images = p.images.split(',').filter(Boolean);
+              }
+          }
+          return {
+              ...p,
+              images,
+              isLiked: !!p.isLiked,
+              isArchived: !!p.is_archived
+          };
+      });
       res.json(posts);
   } catch (err) {
       res.status(500).json({ error: err.message });
@@ -538,18 +783,18 @@ app.put('/posts/:id/archive', async (req, res) => {
     }
 });
 
-// POST /posts (Create Post)
 app.post('/posts', async (req, res) => {
   const { user_id, images, description, song, song_preview } = req.body;
   const id = generateId();
   const timestamp = Date.now();
-  const imagesStr = Array.isArray(images) ? images.join(',') : images;
+  const imagesArray = Array.isArray(images) ? images : (images ? [images] : []);
+  const imagesStr = JSON.stringify(imagesArray);
 
   try {
       await db('posts').insert({
           id, user_id, images: imagesStr, description, song, song_preview, timestamp, likes: 0
       });
-      res.json({ id, user_id, images: imagesStr, description, song, song_preview, timestamp, likes: 0 });
+      res.json({ id, user_id, images: imagesArray, description, song, song_preview, timestamp, likes: 0 });
   } catch (err) {
       res.status(500).json({ error: err.message });
   }

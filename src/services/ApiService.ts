@@ -82,6 +82,42 @@ class ApiService {
     }
   }
 
+  async getFollowStats(userId: string, viewerId?: string) {
+    try {
+      const response = await this.fetchWithTimeout(
+        `${BASE_URL}/followers/stats?userId=${userId}&viewerId=${viewerId || ''}`
+      );
+      return await response.json();
+    } catch (error) {
+      this.handleError('getFollowStats', error);
+      return { followersCount: 0, followingCount: 0, isFollowing: false };
+    }
+  }
+
+  async getFollowers(userId: string) {
+    try {
+      const response = await this.fetchWithTimeout(
+        `${BASE_URL}/followers?userId=${userId}&type=followers`
+      );
+      return await response.json();
+    } catch (error) {
+      this.handleError('getFollowers', error);
+      return [];
+    }
+  }
+
+  async getFollowing(userId: string) {
+    try {
+      const response = await this.fetchWithTimeout(
+        `${BASE_URL}/followers?userId=${userId}&type=following`
+      );
+      return await response.json();
+    } catch (error) {
+      this.handleError('getFollowing', error);
+      return [];
+    }
+  }
+
   async login(username: string, password: string) {
     try {
       const response = await this.fetchWithTimeout(`${BASE_URL}/login`, {
@@ -93,6 +129,21 @@ class ApiService {
       return await response.json();
     } catch (error) {
       this.handleError('login', error);
+      throw error;
+    }
+  }
+
+  async loginWithApple(appleId: string, email?: string, name?: string) {
+    try {
+      const response = await this.fetchWithTimeout(`${BASE_URL}/auth/apple`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ appleId, email, name }),
+      });
+      if (!response.ok) throw new Error('Apple login failed');
+      return await response.json();
+    } catch (error) {
+      this.handleError('loginWithApple', error);
       throw error;
     }
   }
@@ -158,6 +209,34 @@ class ApiService {
     } catch (error) {
       this.handleError('likeUser', error);
       return null;
+    }
+  }
+
+  async followUser(followerId: string, followedId: string) {
+    try {
+      const response = await this.fetchWithTimeout(`${BASE_URL}/follow`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ followerId, followedId }),
+      });
+      return await response.json();
+    } catch (error) {
+      this.handleError('followUser', error);
+      return { success: false };
+    }
+  }
+
+  async unfollowUser(followerId: string, followedId: string) {
+    try {
+      const response = await this.fetchWithTimeout(`${BASE_URL}/unfollow`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ followerId, followedId }),
+      });
+      return await response.json();
+    } catch (error) {
+      this.handleError('unfollowUser', error);
+      return { success: false };
     }
   }
 
@@ -233,6 +312,62 @@ class ApiService {
       return await response.json();
     } catch (error) {
       this.handleError('createPost', error);
+      throw error;
+    }
+  }
+
+  async uploadImage(uri: string): Promise<string> {
+    const fileName = uri.split('/').pop() || 'image.jpg';
+    const ext = fileName.split('.').pop()?.toLowerCase() || 'jpg';
+    const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
+
+    const formData = new FormData();
+    formData.append('file', {
+      uri,
+      name: fileName,
+      type: mimeType,
+    } as any);
+
+    try {
+      const response = await this.fetchWithTimeout(
+        `${BASE_URL}/upload/image`,
+        {
+          ...( { method: 'POST', body: formData as any } as RequestInit & { timeout?: number } ),
+          timeout: 30000,
+        } as any
+      );
+
+      const contentType = response.headers.get('content-type') || '';
+      let data: any = null;
+      let rawBody: string | null = null;
+
+      if (contentType.includes('application/json')) {
+        try {
+          data = await response.json();
+        } catch (parseError: any) {
+          console.error('[ApiService.uploadImage] JSON parse error:', parseError);
+          throw new Error('Upload failed: invalid JSON response from server');
+        }
+      } else {
+        rawBody = await response.text();
+      }
+
+      if (!response.ok) {
+        const message =
+          (data && (data.error || data.message)) ||
+          (rawBody && rawBody.slice(0, 200)) ||
+          `Upload failed with status ${response.status}`;
+        throw new Error(message);
+      }
+
+      const url = data?.url;
+      if (!url) {
+        throw new Error('Upload failed: server did not return an image URL');
+      }
+
+      return url;
+    } catch (error) {
+      this.handleError('uploadImage', error);
       throw error;
     }
   }

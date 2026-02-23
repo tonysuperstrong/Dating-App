@@ -111,6 +111,7 @@ const PostItem = React.memo(({
   navigation: any;
 }) => {
     const isUserColor = item.user_image && item.user_image.startsWith('#');
+    const hasUserImage = !!item.user_image && !isUserColor;
     
     return (
       <View style={styles.postContainer}>
@@ -126,11 +127,15 @@ const PostItem = React.memo(({
                 }
             }}>
                 {isUserColor ? (
-                <View style={[styles.avatar, { backgroundColor: item.user_image }]}>
-                    <Text style={styles.avatarText}>{item.username?.[0]?.toUpperCase() || '?'}</Text>
-                </View>
+                  <View style={[styles.avatar, { backgroundColor: item.user_image }]}>
+                      <Text style={styles.avatarText}>{item.username?.[0]?.toUpperCase() || '?'}</Text>
+                  </View>
+                ) : hasUserImage ? (
+                  <Image source={{ uri: item.user_image }} style={styles.avatar} />
                 ) : (
-                <Image source={{ uri: item.user_image }} style={styles.avatar} />
+                  <View style={[styles.avatar, { backgroundColor: '#ddd' }]}>
+                      <Text style={styles.avatarText}>{item.username?.[0]?.toUpperCase() || '?'}</Text>
+                  </View>
                 )}
             </TouchableOpacity>
             <View>
@@ -153,13 +158,13 @@ const PostItem = React.memo(({
 
         {/* Post Images (Horizontal Scroll) */}
         <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false} style={styles.imageScroll}>
-          {item.images.map((img, index) => (
+          {item.images.filter(Boolean).map((img, index) => (
             <Image key={index} source={{ uri: img }} style={styles.postImage} resizeMode="cover" />
           ))}
         </ScrollView>
-        {item.images.length > 1 && (
+        {item.images.filter(Boolean).length > 1 && (
             <View style={styles.paginationDots}>
-                {item.images.map((_, i) => (
+                {item.images.filter(Boolean).map((_, i) => (
                     <View key={i} style={[styles.dot, i === 0 ? styles.activeDot : null]} />
                 ))}
             </View>
@@ -405,16 +410,45 @@ export default function DatePortalView() {
 
   const handlePickImages = useCallback(async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsMultipleSelection: true,
-      selectionLimit: 5,
-      quality: 0.8,
+      mediaTypes: ['images'],
+      allowsEditing: true,
+      aspect: [4, 5],
+      quality: 0.7,
     });
 
     if (!result.canceled) {
-      setNewPostImages([...newPostImages, ...result.assets.map(asset => asset.uri)]);
+      const localUris = result.assets.map(asset => asset.uri).filter(Boolean);
+      const uploadedUrls: string[] = [];
+      let hadFailures = false;
+      let lastErrorMessage = '';
+
+      for (const uri of localUris) {
+        try {
+          const uploadedUrl = await ApiService.uploadImage(uri);
+          uploadedUrls.push(uploadedUrl);
+        } catch (error: any) {
+          hadFailures = true;
+          lastErrorMessage =
+            (error && error.message) || 'Unknown upload error. Please try again.';
+          console.error('Post image upload error', error);
+        }
+      }
+
+      if (uploadedUrls.length === 0) {
+        Alert.alert('Upload Error', lastErrorMessage);
+        return;
+      }
+
+      setNewPostImages(prev => [...prev, ...uploadedUrls]);
+
+      if (hadFailures) {
+        Alert.alert(
+          'Upload Error',
+          'Some photos failed to upload and will not be included in the post.'
+        );
+      }
     }
-  }, [newPostImages]);
+  }, []);
 
   const resetPostForm = useCallback(() => {
     setNewPostDescription('');
@@ -617,6 +651,7 @@ export default function DatePortalView() {
 
   const renderComment = useCallback(({ item }: { item: Comment }) => {
     const isUserColor = item.user_image && item.user_image.startsWith('#');
+    const hasUserImage = !!item.user_image && !isUserColor;
     return (
         <View style={styles.commentItem}>
             <TouchableOpacity onPress={() => {
@@ -626,11 +661,15 @@ export default function DatePortalView() {
                 }
             }}>
                 {isUserColor ? (
-                <View style={[styles.commentAvatar, { backgroundColor: item.user_image }]}>
-                    <Text style={styles.commentAvatarText}>{item.username?.[0]?.toUpperCase()}</Text>
-                </View>
+                  <View style={[styles.commentAvatar, { backgroundColor: item.user_image }]}>
+                      <Text style={styles.commentAvatarText}>{item.username?.[0]?.toUpperCase()}</Text>
+                  </View>
+                ) : hasUserImage ? (
+                  <Image source={{ uri: item.user_image }} style={styles.commentAvatar} />
                 ) : (
-                <Image source={{ uri: item.user_image }} style={styles.commentAvatar} />
+                  <View style={[styles.commentAvatar, { backgroundColor: '#ddd' }]}>
+                      <Text style={styles.commentAvatarText}>{item.username?.[0]?.toUpperCase()}</Text>
+                  </View>
                 )}
             </TouchableOpacity>
             
@@ -676,20 +715,34 @@ export default function DatePortalView() {
                 showsHorizontalScrollIndicator={false}
                 keyExtractor={item => item.id}
                 contentContainerStyle={styles.recommendationList}
-                renderItem={({ item }) => (
-                    <TouchableOpacity 
-                        style={styles.recommendationItem}
-                        onPress={() => {
-                            if (item.id) {
-                                (navigation as any).navigate('Profile', { userId: item.id });
-                            }
-                        }}
-                    >
-                        <Image source={{ uri: item.image }} style={styles.recommendationImage} />
-                        <Text style={styles.recommendationName} numberOfLines={1}>{item.name}</Text>
-                        {item.age && <Text style={styles.recommendationInfo}>{item.age}</Text>}
-                    </TouchableOpacity>
-                )}
+                renderItem={({ item }) => {
+                    const isColor = item.image && item.image.startsWith('#');
+                    const hasImage = !!item.image && !isColor;
+                    return (
+                        <TouchableOpacity 
+                            style={styles.recommendationItem}
+                            onPress={() => {
+                                if (item.id) {
+                                    (navigation as any).navigate('Profile', { userId: item.id });
+                                }
+                            }}
+                        >
+                            {isColor ? (
+                                <View style={[styles.recommendationImage, { backgroundColor: item.image, justifyContent: 'center', alignItems: 'center' }]}>
+                                    <Text style={styles.avatarText}>{item.name[0]}</Text>
+                                </View>
+                            ) : hasImage ? (
+                                <Image source={{ uri: item.image }} style={styles.recommendationImage} />
+                            ) : (
+                                <View style={[styles.recommendationImage, { backgroundColor: '#ddd', justifyContent: 'center', alignItems: 'center' }]}>
+                                    <Text style={styles.avatarText}>{item.name[0]}</Text>
+                                </View>
+                            )}
+                            <Text style={styles.recommendationName} numberOfLines={1}>{item.name}</Text>
+                            {item.age && <Text style={styles.recommendationInfo}>{item.age}</Text>}
+                        </TouchableOpacity>
+                    );
+                }}
             />
         </View>
 
@@ -790,15 +843,26 @@ export default function DatePortalView() {
             style={styles.modalContainer}
         >
             <View style={styles.modalHeader}>
-                <TouchableOpacity onPress={() => {
-                    resetPostForm();
-                    setCreateModalVisible(false);
-                }}>
-                    <Text style={styles.cancelText}>Cancel</Text>
+                <TouchableOpacity
+                    style={styles.modalCloseButton}
+                    onPress={() => {
+                        resetPostForm();
+                        setCreateModalVisible(false);
+                    }}
+                >
+                    <Text style={styles.modalCloseIcon}>×</Text>
                 </TouchableOpacity>
                 <Text style={styles.modalTitle}>New Post</Text>
-                <TouchableOpacity onPress={handleCreatePost} disabled={isPosting}>
-                    <Text style={[styles.postText, isPosting && styles.disabledText]}>Share</Text>
+                <TouchableOpacity 
+                    onPress={handleCreatePost} 
+                    disabled={isPosting}
+                    style={[styles.shareButton, isPosting && styles.shareButtonDisabled]}
+                >
+                    <Ionicons 
+                      name="send" 
+                      size={20} 
+                      color="#fff" 
+                    />
                 </TouchableOpacity>
             </View>
 
@@ -809,7 +873,7 @@ export default function DatePortalView() {
                         <Text style={styles.addPhotoIcon}>📷</Text>
                         <Text style={styles.addPhotoText}>Add Photos</Text>
                     </TouchableOpacity>
-                    {newPostImages.map((img, index) => (
+                    {newPostImages.filter(Boolean).map((img, index) => (
                         <Image key={index} source={{ uri: img }} style={styles.previewImage} />
                     ))}
                 </ScrollView>
@@ -1077,8 +1141,15 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#eee',
   },
-  cancelText: {
-    fontSize: 16,
+  modalCloseButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  modalCloseIcon: {
+    fontSize: 22,
     color: '#000',
   },
   modalTitle: {
@@ -1092,6 +1163,17 @@ const styles = StyleSheet.create({
   },
   disabledText: {
     color: '#999',
+  },
+  shareButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#007AFF',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  shareButtonDisabled: {
+    backgroundColor: '#ccc',
   },
   modalContent: {
     padding: 20,
